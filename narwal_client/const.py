@@ -85,6 +85,12 @@ WAKE_TIMEOUT = 20.0  # seconds
 # Command response timeout
 COMMAND_RESPONSE_TIMEOUT = 5.0  # seconds
 
+# display_map dropout detection — if robot is cleaning but no display_map
+# arrives for this long, escalate to a full wake burst to recover the
+# topic subscription (which can die during CLEANING_ALT / stuck episodes)
+DISPLAY_MAP_DROPOUT_TIMEOUT = 30.0  # seconds
+DISPLAY_MAP_RECOVERY_COOLDOWN = 120.0  # don't retry recovery more than once per 2 min
+
 # Status broadcast interval
 STATUS_BROADCAST_INTERVAL = 1.5  # seconds (when robot is awake)
 
@@ -103,7 +109,7 @@ class WorkingStatus(IntEnum):
     Values confirmed via live WebSocket monitoring (2026-02-27):
       1  = STANDBY (idle, transition state between cleaning and docked)
       4  = CLEANING (plan-based start; also stays 4 while returning to dock)
-      5  = CLEANING_ALT (seen in some modes, not yet observed live)
+      5  = CLEANING_ALT (observed live: robot was physically stuck when reporting 5)
       10 = DOCKED (on dock, charging)
       14 = CHARGED (on dock, fully charged)
 
@@ -120,7 +126,7 @@ class WorkingStatus(IntEnum):
     UNKNOWN = 0
     STANDBY = 1       # idle / transition state
     CLEANING = 4      # active cleaning (stays 4 even while returning to dock)
-    CLEANING_ALT = 5  # active cleaning (seen in some modes)
+    CLEANING_ALT = 5  # cleaning — observed when robot was physically stuck; may indicate error/stuck state
     DOCKED = 10       # on dock, actively charging
     CHARGED = 14      # on dock, fully charged and idle
     # PLACEHOLDER: error state value not yet observed live.

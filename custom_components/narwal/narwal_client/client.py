@@ -16,6 +16,8 @@ from .const import (
     BROADCAST_STALE_TIMEOUT,
     COMMAND_RESPONSE_TIMEOUT,
     DEFAULT_PORT,
+    DISPLAY_MAP_DROPOUT_TIMEOUT,
+    DISPLAY_MAP_RECOVERY_COOLDOWN,
     HEARTBEAT_INTERVAL,
     KEEPALIVE_INTERVAL,
     RECONNECT_BACKOFF_FACTOR,
@@ -48,6 +50,7 @@ from .const import (
     WAKE_TIMEOUT,
     FanLevel,
     MopHumidity,
+    WorkingStatus,
 )
 from .models import CommandResponse, DeviceInfo, MapData, MapDisplayData, NarwalState
 from .protocol import (
@@ -105,6 +108,8 @@ class NarwalClient:
         self._listener_active = False  # True when start_listening() is running recv loop
         self._robot_awake = False  # True once we receive a broadcast
         self._last_broadcast_time: float = 0.0  # monotonic time of last broadcast
+        self._last_display_map_time: float = 0.0  # monotonic time of last display_map
+        self._last_display_map_recovery: float = 0.0  # last recovery attempt
         # Queue for field5 command responses
         self._response_queue: asyncio.Queue[NarwalMessage] = asyncio.Queue()
 
@@ -357,6 +362,7 @@ class NarwalClient:
             self.state.update_from_download_status(decoded)
         elif short_topic == "map/display_map":
             self.state.map_display_data = MapDisplayData.from_broadcast(decoded)
+            self._last_display_map_time = time.monotonic()
             _LOGGER.debug(
                 "display_map received: robot=(%.2f, %.2f) ts=%d",
                 self.state.map_display_data.robot_x,
@@ -581,8 +587,32 @@ class NarwalClient:
                     self._robot_awake = False
 
                 if self._robot_awake:
+                    # Detect display_map dropout during cleaning.
+                    # If the robot is cleaning but display_map stopped arriving
+                    # (e.g. after CLEANING_ALT/stuck), the regular topic resub
+                    # doesn't recover it. Escalate to a full wake burst which
+                    # includes notify_app_event to reset topic state.
+                    now = time.monotonic()
+                    if (
+                        self._last_display_map_time > 0
+                        and self.state.working_status
+                        in (WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT)
+                        and now - self._last_display_map_time
+                        > DISPLAY_MAP_DROPOUT_TIMEOUT
+                        and now - self._last_display_map_recovery
+                        > DISPLAY_MAP_RECOVERY_COOLDOWN
+                    ):
+                        _LOGGER.warning(
+                            "display_map dropout: %.0fs since last during %s "
+                            "— sending full wake burst to recover",
+                            now - self._last_display_map_time,
+                            self.state.working_status.name,
+                        )
+                        await self._send_wake_burst()
+                        self._last_display_map_recovery = now
+                        last_resub_time = now
                     # Re-subscribe to topics before the subscription expires
-                    if time.monotonic() - last_resub_time > self._TOPIC_RESUB_INTERVAL:
+                    elif time.monotonic() - last_resub_time > self._TOPIC_RESUB_INTERVAL:
                         try:
                             payload = self._build_topic_subscription(
                                 self._TOPIC_SUB_DURATION

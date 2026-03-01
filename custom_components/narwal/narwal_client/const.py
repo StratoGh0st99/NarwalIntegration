@@ -85,6 +85,12 @@ WAKE_TIMEOUT = 20.0  # seconds
 # Command response timeout
 COMMAND_RESPONSE_TIMEOUT = 5.0  # seconds
 
+# display_map dropout detection — if robot is cleaning but no display_map
+# arrives for this long, escalate to a full wake burst to recover the
+# topic subscription (which can die during CLEANING_ALT / stuck episodes)
+DISPLAY_MAP_DROPOUT_TIMEOUT = 30.0  # seconds
+DISPLAY_MAP_RECOVERY_COOLDOWN = 120.0  # don't retry recovery more than once per 2 min
+
 # Status broadcast interval
 STATUS_BROADCAST_INTERVAL = 1.5  # seconds (when robot is awake)
 
