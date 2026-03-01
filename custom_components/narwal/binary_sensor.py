@@ -12,7 +12,6 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import NarwalConfigEntry
 from .coordinator import NarwalCoordinator
 from .entity import NarwalEntity
-from .narwal_client.const import WorkingStatus
 
 
 async def async_setup_entry(
@@ -62,18 +61,17 @@ class NarwalChargingSensor(NarwalEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool | None:
-        """Return True if docked and not fully charged, False if fully charged.
+        """Return True if docked and battery not full.
 
         Returns None (unavailable) when not docked.
 
-        The robot may report STANDBY(1) with dock signals instead of
-        DOCKED(10) after returning to dock. is_docked handles both, but
-        we can't rely on working_status == DOCKED alone. Instead: if on
-        dock and not CHARGED(14), the robot is charging.
+        Cannot rely on working_status: DOCKED(10) vs CHARGED(14) doesn't
+        correspond to actual charge state — robot reports CHARGED(14)
+        even at 97%. Use battery_level directly instead.
         """
         state = self.coordinator.data
         if state is None:
             return None
         if not state.is_docked:
             return None
-        return state.working_status != WorkingStatus.CHARGED
+        return state.battery_level < 100
