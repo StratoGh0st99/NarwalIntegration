@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import time
+from collections import deque
 
 from aiohttp import web
 
@@ -24,6 +26,12 @@ _FRAME_INTERVAL = 2.0
 # but PIL rendering is CPU-bound — no need to render every broadcast).
 _MIN_RENDER_INTERVAL = 2
 
+# Debug view: blank canvas with robot dot + trail.
+# Set to False to use the real map renderer instead.
+_DEBUG_VIEW = True
+_DEBUG_CANVAS_SIZE = 500  # pixels
+_DEBUG_TRAIL_LENGTH = 200  # recent positions to keep
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -37,13 +45,7 @@ async def async_setup_entry(
 
 
 class NarwalMapCamera(NarwalEntity, Camera):
-    """Camera entity that displays the vacuum's map as a PNG via MJPEG stream.
-
-    Uses CameraEntity so the frontend can open a persistent MJPEG connection
-    with camera_view: live, getting new frames every _FRAME_INTERVAL seconds.
-    The image is rendered server-side with PIL from the static map grid +
-    real-time robot position overlay from display_map broadcasts.
-    """
+    """Camera entity that displays the vacuum's map as a PNG via MJPEG stream."""
 
     _attr_frame_interval = _FRAME_INTERVAL
     _attr_content_type = "image/png"
@@ -71,6 +73,8 @@ class NarwalMapCamera(NarwalEntity, Camera):
         self._cache_key: tuple = ()
         self._last_render_time: float = 0.0
         self._render_count: int = 0
+        # Trail of recent raw positions for debug view
+        self._trail: deque[tuple[float, float]] = deque(maxlen=_DEBUG_TRAIL_LENGTH)
 
     def camera_image(
         self, width: int | None = None, height: int | None = None,
@@ -81,11 +85,7 @@ class NarwalMapCamera(NarwalEntity, Camera):
     async def handle_async_mjpeg_stream(
         self, request: web.Request,
     ) -> web.StreamResponse | None:
-        """Serve an MJPEG stream by polling cached map frames.
-
-        Without this override the base Camera returns None, and the frontend
-        falls back to a single static snapshot that never refreshes.
-        """
+        """Serve an MJPEG stream by polling cached map frames."""
         return await async_get_still_stream(
             request, self.async_camera_image,
             self._attr_content_type, self._attr_frame_interval,
@@ -95,57 +95,78 @@ class NarwalMapCamera(NarwalEntity, Camera):
     def _handle_coordinator_update(self) -> None:
         """Re-render the map when new data arrives from the coordinator."""
         state = self.coordinator.client.state
-        static_map = state.map_data
         display = state.map_display_data
 
-        # Must have a static map to render anything
-        if not static_map or not static_map.compressed_map:
-            self.async_write_ha_state()
-            return
-        if static_map.width <= 0 or static_map.height <= 0:
-            self.async_write_ha_state()
-            return
+        if _DEBUG_VIEW:
+            # Debug view only needs display_map data
+            if not display or (display.robot_x == 0.0 and display.robot_y == 0.0):
+                self.async_write_ha_state()
+                return
 
-        # Build cache key from static map + robot position (not just timestamp,
-        # which may be 0 or constant across broadcasts).
-        static_ts = static_map.created_at or 0
-        if display:
-            new_key = (static_ts, display.robot_x, display.robot_y, display.robot_heading)
+            new_key = (display.robot_x, display.robot_y, display.robot_heading)
         else:
-            new_key = (static_ts,)
+            static_map = state.map_data
+            if not static_map or not static_map.compressed_map:
+                self.async_write_ha_state()
+                return
+            if static_map.width <= 0 or static_map.height <= 0:
+                self.async_write_ha_state()
+                return
+            static_ts = static_map.created_at or 0
+            if display:
+                new_key = (static_ts, display.robot_x, display.robot_y, display.robot_heading)
+            else:
+                new_key = (static_ts,)
 
         now = time.monotonic()
         since_render = now - self._last_render_time if self._last_render_time else 999
 
-        # Skip re-render if nothing changed
         if new_key == self._cache_key and self._cached_image:
             self.async_write_ha_state()
             return
 
-        # Throttle renders during cleaning
-        if (
-            display is not None
-            and self._cached_image
-            and since_render < _MIN_RENDER_INTERVAL
-        ):
+        if self._cached_image and since_render < _MIN_RENDER_INTERVAL:
             self.async_write_ha_state()
             return
 
-        _LOGGER.debug(
-            "map render #%d: display=%s pos=(%.1f,%.1f) since=%.1fs",
-            self._render_count + 1,
-            display is not None,
-            display.robot_x if display else 0,
-            display.robot_y if display else 0,
-            since_render,
-        )
+        self.hass.async_create_task(self._async_render(display, new_key))
 
-        # Schedule async render (we're in a sync callback)
-        self.hass.async_create_task(self._async_render(static_map, display, new_key))
-
-    async def _async_render(self, static_map, display, new_key) -> None:
+    async def _async_render(self, display, new_key) -> None:
         """Render the map image in an executor thread."""
-        # Robot position from display_map (convert to grid pixels)
+        if _DEBUG_VIEW and display:
+            self._trail.append((display.robot_x, display.robot_y))
+            trail = list(self._trail)
+            try:
+                png_bytes = await self.hass.async_add_executor_job(
+                    _render_debug_view,
+                    display.robot_x,
+                    display.robot_y,
+                    display.robot_heading,
+                    trail,
+                )
+                if png_bytes:
+                    self._cached_image = png_bytes
+                    self._cache_key = new_key
+                    self._last_render_time = time.monotonic()
+                    self._render_count += 1
+                    _LOGGER.debug(
+                        "debug rendered #%d: raw=(%.1f,%.1f) trail=%d",
+                        self._render_count,
+                        display.robot_x, display.robot_y,
+                        len(trail),
+                    )
+            except Exception:
+                _LOGGER.exception("Failed to render debug view")
+            self.async_write_ha_state()
+            return
+
+        # --- Normal map render path ---
+        state = self.coordinator.client.state
+        static_map = state.map_data
+        if not static_map:
+            self.async_write_ha_state()
+            return
+
         robot_x = None
         robot_y = None
         robot_heading = None
@@ -156,18 +177,7 @@ class NarwalMapCamera(NarwalEntity, Camera):
             if grid_pos is not None:
                 robot_x, robot_y = grid_pos
                 robot_heading = display.robot_heading
-                if self._render_count < 3:
-                    _LOGGER.debug(
-                        "transform: raw=(%.2f,%.2f) res=%d origin=(%d,%d) "
-                        "→ pixel=(%.1f,%.1f) map=%dx%d",
-                        display.robot_x, display.robot_y,
-                        static_map.resolution,
-                        static_map.origin_x, static_map.origin_y,
-                        robot_x, robot_y,
-                        static_map.width, static_map.height,
-                    )
 
-        # Dock position and room names from static map
         dock_x = static_map.dock_x
         dock_y = static_map.dock_y
         room_names: dict[int, str] | None = None
@@ -197,15 +207,110 @@ class NarwalMapCamera(NarwalEntity, Camera):
                 self._cache_key = new_key
                 self._last_render_time = time.monotonic()
                 self._render_count += 1
-                _LOGGER.debug(
-                    "map rendered #%d: %d bytes, robot=(%s,%s)",
-                    self._render_count,
-                    len(png_bytes),
-                    robot_x,
-                    robot_y,
-                )
 
         except Exception:
             _LOGGER.exception("Failed to render map image")
 
         self.async_write_ha_state()
+
+
+def _render_debug_view(
+    robot_x: float,
+    robot_y: float,
+    robot_heading: float,
+    trail: list[tuple[float, float]],
+) -> bytes:
+    """Render a blank canvas with robot dot + position trail.
+
+    Raw cm coordinates are auto-scaled to fit the canvas with padding.
+    Coordinate text is drawn for reference.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    size = _DEBUG_CANVAS_SIZE
+    img = Image.new("RGB", (size, size), (20, 20, 30))
+    draw = ImageDraw.Draw(img)
+
+    # Determine bounds from trail
+    all_x = [p[0] for p in trail]
+    all_y = [p[1] for p in trail]
+    min_x, max_x = min(all_x), max(all_x)
+    min_y, max_y = min(all_y), max(all_y)
+
+    # Add padding and ensure minimum range (500cm = 5m)
+    padding = 200  # cm
+    range_x = max(max_x - min_x, 500) + padding * 2
+    range_y = max(max_y - min_y, 500) + padding * 2
+    center_x = (min_x + max_x) / 2
+    center_y = (min_y + max_y) / 2
+
+    # Use uniform scale (fit both axes)
+    scale = size / max(range_x, range_y)
+    margin = 40  # px reserved for text
+    usable = size - margin * 2
+    scale = usable / max(range_x, range_y)
+
+    def to_px(cx: float, cy: float) -> tuple[int, int]:
+        px = int((cx - center_x) * scale + size / 2)
+        py = int(-(cy - center_y) * scale + size / 2)  # flip Y
+        return px, py
+
+    # Draw grid lines at 100cm (1m) intervals
+    grid_interval = 100  # cm
+    grid_start_x = int(center_x - range_x / 2)
+    grid_start_x = grid_start_x - (grid_start_x % grid_interval)
+    grid_start_y = int(center_y - range_y / 2)
+    grid_start_y = grid_start_y - (grid_start_y % grid_interval)
+
+    grid_color = (40, 40, 50)
+    for gx in range(grid_start_x, int(center_x + range_x / 2) + grid_interval, grid_interval):
+        px, _ = to_px(gx, 0)
+        if 0 <= px < size:
+            draw.line([(px, 0), (px, size)], fill=grid_color)
+    for gy in range(grid_start_y, int(center_y + range_y / 2) + grid_interval, grid_interval):
+        _, py = to_px(0, gy)
+        if 0 <= py < size:
+            draw.line([(0, py), (size, py)], fill=grid_color)
+
+    # Draw trail (fading from dim to bright)
+    for i, (tx, ty) in enumerate(trail[:-1]):
+        alpha = int(80 + 175 * (i / max(len(trail) - 1, 1)))
+        color = (0, alpha // 2, alpha)
+        px, py = to_px(tx, ty)
+        r = 2
+        draw.ellipse([px - r, py - r, px + r, py + r], fill=color)
+
+    # Draw robot current position (bright green dot)
+    rx, ry = to_px(robot_x, robot_y)
+    dot_r = 6
+    draw.ellipse(
+        [rx - dot_r, ry - dot_r, rx + dot_r, ry + dot_r],
+        fill=(0, 255, 80),
+    )
+
+    # Draw heading indicator
+    import math
+    heading_rad = math.radians(robot_heading)
+    hx = rx + int(15 * math.cos(heading_rad))
+    hy = ry - int(15 * math.sin(heading_rad))
+    draw.line([(rx, ry), (hx, hy)], fill=(0, 255, 80), width=2)
+
+    # Draw coordinate text
+    try:
+        font = ImageFont.load_default()
+    except Exception:
+        font = None
+    text = f"({robot_x:.1f}, {robot_y:.1f}) cm"
+    draw.text((5, 5), text, fill=(200, 200, 200), font=font)
+    draw.text((5, 20), f"trail: {len(trail)} pts", fill=(120, 120, 140), font=font)
+    draw.text((5, 35), f"heading: {robot_heading:.0f}°", fill=(120, 120, 140), font=font)
+
+    # Origin crosshair (if visible)
+    ox, oy = to_px(0, 0)
+    if 0 <= ox < size and 0 <= oy < size:
+        draw.line([(ox - 8, oy), (ox + 8, oy)], fill=(100, 100, 100))
+        draw.line([(ox, oy - 8), (ox, oy + 8)], fill=(100, 100, 100))
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
