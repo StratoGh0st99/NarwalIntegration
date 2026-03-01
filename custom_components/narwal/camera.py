@@ -97,6 +97,15 @@ class NarwalMapCamera(NarwalEntity, Camera):
         state = self.coordinator.client.state
         display = state.map_display_data
 
+        _LOGGER.debug(
+            "camera update: debug=%s, display=%s, robot=(%.2f, %.2f), cached=%s",
+            _DEBUG_VIEW,
+            display is not None,
+            display.robot_x if display else 0,
+            display.robot_y if display else 0,
+            self._cached_image is not None,
+        )
+
         if _DEBUG_VIEW:
             # Debug view only needs display_map data
             if not display or (display.robot_x == 0.0 and display.robot_y == 0.0):
