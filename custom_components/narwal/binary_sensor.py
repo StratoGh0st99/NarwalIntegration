@@ -62,13 +62,18 @@ class NarwalChargingSensor(NarwalEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool | None:
-        """Return True if charging (DOCKED=10), False if charged (CHARGED=14).
+        """Return True if docked and not fully charged, False if fully charged.
 
         Returns None (unavailable) when not docked.
+
+        The robot may report STANDBY(1) with dock signals instead of
+        DOCKED(10) after returning to dock. is_docked handles both, but
+        we can't rely on working_status == DOCKED alone. Instead: if on
+        dock and not CHARGED(14), the robot is charging.
         """
         state = self.coordinator.data
         if state is None:
             return None
         if not state.is_docked:
             return None
-        return state.working_status == WorkingStatus.DOCKED
+        return state.working_status != WorkingStatus.CHARGED
