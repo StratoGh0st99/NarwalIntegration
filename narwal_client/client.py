@@ -325,6 +325,7 @@ class NarwalClient:
 
         # Field5 (0x2a) messages are command responses
         if msg.field_tag == PROTOBUF_FIELD5_TAG:
+            _LOGGER.debug("Field5 response routed to queue: %s", msg.short_topic)
             await self._response_queue.put(msg)
             return
 
@@ -339,6 +340,7 @@ class NarwalClient:
 
         # Decode protobuf and update state based on topic
         short_topic = msg.short_topic
+        _LOGGER.debug("Broadcast topic: %s (tag=0x%02x)", short_topic, msg.field_tag)
         try:
             decoded = self._decode_protobuf(msg.payload)
         except Exception:
@@ -359,6 +361,12 @@ class NarwalClient:
             self.state.update_from_download_status(decoded)
         elif short_topic == "map/display_map":
             self.state.map_display_data = MapDisplayData.from_broadcast(decoded)
+            _LOGGER.warning(
+                "display_map received: robot=(%.2f, %.2f) ts=%d",
+                self.state.map_display_data.robot_x,
+                self.state.map_display_data.robot_y,
+                self.state.map_display_data.timestamp,
+            )
 
         if self.on_state_update:
             self.on_state_update(self.state)
