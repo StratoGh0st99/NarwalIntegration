@@ -2,16 +2,32 @@
 
 A fully **local, cloud-independent** [Home Assistant](https://www.home-assistant.io/) custom integration for Narwal robot vacuums. Communicates directly with your vacuum over your local network via WebSocket — no cloud account or internet connection required.
 
-> **Status: v0.3.0 — Early Release** — Core vacuum control, sensors, and map display are working. Some features are still being refined. Use at your own risk.
+> **Status: v0.3.0 — Early Release** — Core vacuum control, sensors, and map display are working for the Narwal Flow (AX12). Other model support is being explored. Use at your own risk.
 
-## Supported Devices
+## Device Compatibility
 
-| Model | Internal Code | Status | Notes |
-|-------|---------------|--------|-------|
-| Narwal Flow | AX12 | Working | Local WebSocket on port 9002 |
-| Narwal FREO Z10 | — | Not Compatible | No local WebSocket; uses cloud/P2P protocol |
+This integration uses a **local WebSocket connection on port 9002**. Only models that expose this port can be supported — models that communicate exclusively through Narwal's cloud servers cannot be controlled locally.
 
-Other Narwal models *may* work if they expose a local WebSocket on port 9002 (same protocol as the Flow/AX12). If you have a different model, please open an issue with your model name, an nmap scan of the device, and any logs.
+| Model | Internal Code | Local Port 9002 | Status | Notes |
+|-------|---------------|:---------------:|--------|-------|
+| **Narwal Flow** | AX12 | Yes | **Working** | Fully tested — all features functional |
+| **Freo Z10 Ultra** | — | Yes | **Partial** | Connects and broadcasts; state mapping and wake reliability under investigation |
+| **Freo X Ultra** | AX18/AX19 | Varies | **Under Investigation** | Some units have port 9002, others use ZeroMQ on port 6789 |
+| **Freo X Plus** | — | No | **Not Supported** | Cloud-only (MQTT via Narwal servers) — no local API available |
+
+### What "Not Supported" means
+
+Models marked **Not Supported** communicate exclusively through Narwal's cloud servers. There is no local API to connect to, so this integration cannot control them. This is a hardware/firmware limitation, not something that can be fixed in software.
+
+### Other models
+
+If your Narwal model is not listed above, it *may* work if it exposes a local WebSocket on port 9002. To check:
+
+```bash
+nmap -p 9002 <your-vacuum-ip>
+```
+
+If port 9002 is open, please [open an issue](https://github.com/sjmotew/NarwalIntegration/issues/new/choose) with your model name and nmap results — we'd love to test it.
 
 ## Features
 
@@ -122,6 +138,10 @@ If the robot is in deep sleep (e.g., after being idle for a long time), it may t
 | Fan speed shows unknown | Set fan speed once from HA; it will track from that point. The robot doesn't broadcast this value. |
 | Docked status wrong | The integration uses multiple signals to detect dock status. If you see issues, please report with debug logs. |
 
+## Reporting Issues
+
+Please use the [issue templates](https://github.com/sjmotew/NarwalIntegration/issues/new/choose) when reporting bugs. The templates ask for your HA version, Narwal model, integration version, and debug logs — this information is essential for diagnosing problems quickly.
+
 ## Disclaimer
 
 This is an **unofficial**, community-developed integration. It is not affiliated with, endorsed by, or supported by Narwal in any way. The local WebSocket protocol was reverse-engineered from publicly observable network traffic and the Narwal mobile application.
@@ -134,7 +154,7 @@ This is an **unofficial**, community-developed integration. It is not affiliated
 
 Contributions and testing are welcome! Please open an issue or pull request on [GitHub](https://github.com/sjmotew/NarwalIntegration).
 
-If you have a Narwal model other than the Flow (AX12), testing reports are especially valuable.
+If you have a Narwal model other than the Flow (AX12), testing reports are especially valuable — but please note that our current priority is stabilizing the Flow integration before expanding to other models.
 
 ## License
 
