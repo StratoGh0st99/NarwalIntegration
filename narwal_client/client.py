@@ -561,7 +561,10 @@ class NarwalClient:
         expires (every _TOPIC_RESUB_INTERVAL seconds) so that display_map,
         robot_base_status, etc. keep flowing during long cleaning sessions.
         """
-        last_resub_time = time.monotonic()
+        # Start at 0 so the first keepalive tick sends the subscription
+        # immediately. This handles the case where the robot is already
+        # broadcasting (e.g. mid-cleaning) and wake() skips the burst.
+        last_resub_time = 0.0
         try:
             while self.connected:
                 await asyncio.sleep(KEEPALIVE_INTERVAL)
