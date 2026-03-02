@@ -53,6 +53,7 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
         self._listen_task: asyncio.Task[None] | None = None
         self._fast_poll_remaining = 0
         self._prev_working_status = WorkingStatus.UNKNOWN
+        self._map_fetch_pending = False
 
     async def async_setup(self) -> None:
         """Connect to the vacuum and start the WebSocket listener.
@@ -138,6 +139,15 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
             state.dock_sub_state, state.dock_activity,
         )
 
+        # Fetch static map if missing — get_map() failed at startup (robot asleep)
+        if state.map_data is None and not self._map_fetch_pending:
+            self._map_fetch_pending = True
+            self.config_entry.async_create_background_task(
+                self.hass,
+                self._fetch_missing_map(),
+                f"{DOMAIN}_map_fetch",
+            )
+
         # Detect return-to-dock transition: CLEANING/CLEANING_ALT → STANDBY.
         # Broadcast dock fields (f11, f47) are stale after docking — they only
         # refresh via get_status() poll. Schedule an immediate poll so the UI
@@ -164,6 +174,16 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
                 "Narwal broadcast received: status=%s — normal polling restored",
                 state.working_status.name,
             )
+
+    async def _fetch_missing_map(self) -> None:
+        """Fetch static map when it's missing (get_map failed at startup)."""
+        try:
+            await self.client.get_map()
+            _LOGGER.info("Static map loaded (was missing at startup)")
+            self.async_set_updated_data(self.client.state)
+        except Exception:
+            _LOGGER.debug("Map fetch failed — will retry on next broadcast")
+            self._map_fetch_pending = False
 
     async def _refresh_dock_status(self) -> None:
         """Immediate get_status() after return-to-dock to refresh dock fields."""
