@@ -342,6 +342,154 @@ def render_map_png(
     return buf.getvalue()
 
 
+def render_base_map(
+    compressed: bytes,
+    width: int,
+    height: int,
+    dock_x: float | None = None,
+    dock_y: float | None = None,
+    room_names: dict[int, str] | None = None,
+) -> "Image.Image | None":
+    """Render the static floor plan as a PIL Image (no robot overlay).
+
+    Returns a PIL Image that can be cached and reused across frames.
+    Only needs to be re-rendered when the static map data changes.
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        _LOGGER.error("Pillow is required for map rendering")
+        return None
+
+    decompressed = decompress_map(compressed)
+    if not decompressed or width <= 0 or height <= 0:
+        return None
+
+    pixels = _decode_packed_varints(decompressed)
+    expected = width * height
+
+    if len(pixels) < expected:
+        pixels.extend([0] * (expected - len(pixels)))
+    elif len(pixels) > expected:
+        pixels = pixels[:expected]
+
+    img = Image.new("RGB", (width, height), COLOR_UNKNOWN)
+    px = img.load()
+
+    room_sum_x: dict[int, int] = {}
+    room_sum_y: dict[int, int] = {}
+    room_count: dict[int, int] = {}
+
+    for i, val in enumerate(pixels):
+        x = i % width
+        y = i // width
+
+        if val == 0:
+            continue
+        elif val == 0x20:
+            px[x, y] = COLOR_UNASSIGNED_FLOOR
+        elif val == 0x28:
+            px[x, y] = COLOR_UNASSIGNED_OBSTACLE
+        else:
+            room_id = val >> 8
+            ptype = val & 0xFF
+
+            if 1 <= room_id <= len(ROOM_COLORS):
+                base = ROOM_COLORS[room_id - 1]
+            else:
+                base = COLOR_FALLBACK
+
+            if ptype & 0x10:
+                px[x, y] = _darken(base)
+            else:
+                px[x, y] = base
+
+            if room_names and room_id in room_names and not (ptype & 0x10):
+                room_sum_x[room_id] = room_sum_x.get(room_id, 0) + x
+                room_sum_y[room_id] = room_sum_y.get(room_id, 0) + y
+                room_count[room_id] = room_count.get(room_id, 0) + 1
+
+    img = img.transpose(Image.FLIP_TOP_BOTTOM)
+    draw = ImageDraw.Draw(img)
+
+    if room_names:
+        try:
+            font = ImageFont.truetype("arial.ttf", 10)
+        except (IOError, OSError):
+            font = ImageFont.load_default()
+        for rid, name in room_names.items():
+            if not name or rid not in room_count:
+                continue
+            cx = room_sum_x[rid] // room_count[rid]
+            cy = height - 1 - (room_sum_y[rid] // room_count[rid])
+            bbox = font.getbbox(name)
+            tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
+            tx = cx - tw // 2
+            ty = cy - th // 2
+            for ox, oy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                draw.text((tx + ox, ty + oy), name, fill=(0, 0, 0), font=font)
+            draw.text((tx, ty), name, fill=(255, 255, 255), font=font)
+
+    if dock_x is not None and dock_y is not None:
+        dock_size = max(4, min(width, height) // 60)
+        _draw_dock(draw, int(dock_x), height - 1 - int(dock_y), dock_size)
+
+    return img
+
+
+def render_overlay(
+    base_img: "Image.Image",
+    height: int,
+    robot_x: float | None = None,
+    robot_y: float | None = None,
+    robot_heading: float | None = None,
+    trail: list[tuple[float, float]] | None = None,
+) -> bytes:
+    """Draw robot position and trail on a copy of the cached base map.
+
+    Args:
+        base_img: Cached PIL Image from render_base_map (not modified).
+        height: Map height in pixels (for Y-flip).
+        robot_x: Robot X in grid coordinates.
+        robot_y: Robot Y in grid coordinates.
+        robot_heading: Heading in degrees.
+        trail: List of (grid_x, grid_y) positions to draw as cleaning path.
+
+    Returns:
+        PNG bytes of the composited image.
+    """
+    from PIL import ImageDraw
+
+    img = base_img.copy()
+    draw = ImageDraw.Draw(img)
+    width = img.width
+
+    # Draw trail (blue path showing where robot has cleaned)
+    if trail and len(trail) >= 2:
+        recent_start = max(len(trail) - 200, 0)
+        for i in range(len(trail) - 1):
+            if i >= recent_start:
+                color = (30, 120, 255)  # bright blue for recent
+            else:
+                color = (15, 60, 130)  # dim blue for older
+            x1, y1 = int(trail[i][0]), height - 1 - int(trail[i][1])
+            x2, y2 = int(trail[i + 1][0]), height - 1 - int(trail[i + 1][1])
+            draw.line([(x1, y1), (x2, y2)], fill=color, width=2)
+
+    # Draw robot
+    if robot_x is not None and robot_y is not None:
+        rx = int(robot_x)
+        ry = height - 1 - int(robot_y)
+        if 0 <= rx < width and 0 <= ry < height:
+            radius = max(3, min(width, height) // 80)
+            _draw_robot(draw, rx, ry, robot_heading, radius)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def render_map_from_compressed(
     compressed: bytes,
     width: int,
@@ -353,7 +501,7 @@ def render_map_from_compressed(
     dock_y: float | None = None,
     room_names: dict[int, str] | None = None,
 ) -> bytes:
-    """Decompress and render map data in one step.
+    """Decompress and render map data in one step (legacy interface).
 
     Args:
         compressed: Compressed map bytes from the robot.

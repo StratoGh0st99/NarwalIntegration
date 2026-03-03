@@ -172,6 +172,9 @@ class MapDisplayData:
     robot_y: float = 0.0  # decimeters, world coordinates
     robot_heading: float = 0.0  # degrees (converted from radians for renderer)
     timestamp: int = 0  # milliseconds since epoch (field 10)
+    # Dock/reference position from field 5 (same coordinate system as robot)
+    dock_ref_x: float = 0.0
+    dock_ref_y: float = 0.0
 
     def to_grid_coords(
         self, resolution: int, origin_x: int, origin_y: int,
@@ -224,6 +227,18 @@ class MapDisplayData:
                 h_f = _to_float32(heading_raw)
                 if h_f is not None and math.isfinite(h_f):
                     result.robot_heading = math.degrees(h_f)
+
+        # Dock/reference position — field 5 (same format as field 1)
+        field5 = decoded.get("5", {})
+        if isinstance(field5, dict):
+            pos5 = field5.get("1", {})
+            if isinstance(pos5, dict):
+                dx = _to_float32(pos5.get("1"))
+                if dx is not None and math.isfinite(dx):
+                    result.dock_ref_x = dx
+                dy = _to_float32(pos5.get("2"))
+                if dy is not None and math.isfinite(dy):
+                    result.dock_ref_y = dy
 
         # Timestamp — field 10 (milliseconds since epoch)
         if "10" in decoded:
