@@ -142,8 +142,12 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         """Start or resume cleaning."""
         await self._ensure_awake()
         state = self.coordinator.data
-        if state and state.is_paused:
-            await self.coordinator.client.resume()
+        # is_paused stays stale after docking — only trust it during cleaning
+        is_cleaning = state and state.working_status in (
+            WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
+        )
+        if is_cleaning and state.is_paused:
+            await self.coordinator.client.resume(timeout=self._ACTION_TIMEOUT)
         else:
             await self.coordinator.client.start(timeout=self._ACTION_TIMEOUT)
 

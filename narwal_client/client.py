@@ -900,9 +900,9 @@ class NarwalClient:
         """Pause current task."""
         return await self.send_command(TOPIC_CMD_PAUSE)
 
-    async def resume(self) -> CommandResponse:
+    async def resume(self, timeout: float = COMMAND_RESPONSE_TIMEOUT) -> CommandResponse:
         """Resume paused task."""
-        return await self.send_command(TOPIC_CMD_RESUME)
+        return await self.send_command(TOPIC_CMD_RESUME, timeout=timeout)
 
     async def stop(self, timeout: float = COMMAND_RESPONSE_TIMEOUT) -> CommandResponse:
         """Force-stop current task."""
