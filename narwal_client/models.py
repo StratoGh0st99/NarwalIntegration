@@ -358,10 +358,9 @@ class NarwalState:
 
     @property
     def is_docked(self) -> bool:
-        """True when on dock: DOCKED(10), CHARGED(14), or STANDBY(1) with dock signals.
+        """True when on dock: DOCKED(10), CHARGED(14), or dock field signals.
 
-        STANDBY(1) is ambiguous — robot can be idle on or off the dock.
-        Dock signals for STANDBY (checked in priority order):
+        Dock signals (checked for STANDBY, UNKNOWN, and any unmapped status):
           - dock_sub_state == 1 (field 3.10, confirmed live)
           - dock_activity > 0 (field 3.12, values 2/6 when docked)
           - dock_field11 == 2 (field 11: 2=docked, 1=undocked)
@@ -369,18 +368,24 @@ class NarwalState:
 
         Fields 11 and 47 validated via dock_research.py guided test with
         5 captures across on-dock and off-dock states — perfect correlation.
+
+        Dock fields are checked for STANDBY/UNKNOWN and any status where
+        cleaning is not active, since the robot can report unmapped states
+        (e.g. self-test) while physically docked.
         """
         if self.working_status in (WorkingStatus.DOCKED, WorkingStatus.CHARGED):
             return True
-        if self.working_status == WorkingStatus.STANDBY:
-            if self.dock_sub_state == 1:
-                return True
-            if self.dock_activity > 0:
-                return True
-            if self.dock_field11 == 2:
-                return True
-            if self.dock_field47 == 3:
-                return True
+        if self.working_status in (WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT):
+            return False
+        # For STANDBY, UNKNOWN, or any other status: check dock field signals
+        if self.dock_sub_state == 1:
+            return True
+        if self.dock_activity > 0:
+            return True
+        if self.dock_field11 == 2:
+            return True
+        if self.dock_field47 == 3:
+            return True
         return False
 
     @property

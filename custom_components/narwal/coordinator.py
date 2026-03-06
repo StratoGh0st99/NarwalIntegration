@@ -53,6 +53,7 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
         self._listen_task: asyncio.Task[None] | None = None
         self._fast_poll_remaining = 0
         self._prev_working_status = WorkingStatus.UNKNOWN
+        self._status_fetch_pending = False
         self._map_fetch_pending = False
 
     async def async_setup(self) -> None:
@@ -148,6 +149,19 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
                 f"{DOMAIN}_map_fetch",
             )
 
+        # Robot is broadcasting but working_status is UNKNOWN — broadcasts
+        # may lack field 3 (e.g. during self-test or unmapped states).
+        # Do a one-time get_status() to get full field 3 from a command
+        # response.  Broadcasts reset the poll timer via async_set_updated_data
+        # so the normal poll never fires while broadcasts are active.
+        if state.working_status == WorkingStatus.UNKNOWN and not self._status_fetch_pending:
+            self._status_fetch_pending = True
+            self.config_entry.async_create_background_task(
+                self.hass,
+                self._fetch_initial_status(),
+                f"{DOMAIN}_status_fetch",
+            )
+
         # Detect return-to-dock transition: CLEANING/CLEANING_ALT → STANDBY.
         # Broadcast dock fields (f11, f47) are stale after docking — they only
         # refresh via get_status() poll. Schedule an immediate poll so the UI
@@ -195,6 +209,26 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
         except Exception:
             _LOGGER.debug("Topic subscription failed after map load")
         self.async_set_updated_data(self.client.state)
+
+    async def _fetch_initial_status(self) -> None:
+        """One-time get_status() when broadcasts lack working_status.
+
+        Broadcasts may not contain field 3 (working_status) during certain
+        robot states (e.g. self-test, unmapped states).  Since broadcasts
+        reset the poll timer, the normal polling fallback never fires while
+        broadcasts are active.  This background task fills the gap.
+        """
+        try:
+            await self.client.get_status(full_update=True)
+            _LOGGER.info(
+                "Initial status fetched: status=%s, docked=%s",
+                self.client.state.working_status.name,
+                self.client.state.is_docked,
+            )
+            self.async_set_updated_data(self.client.state)
+        except Exception:
+            _LOGGER.debug("Initial status fetch failed — will resolve via poll")
+            self._status_fetch_pending = False
 
     async def _refresh_dock_status(self) -> None:
         """Immediate get_status() after return-to-dock to refresh dock fields."""
