@@ -490,11 +490,12 @@ class NarwalClient:
     def _build_wake_commands(self) -> list[tuple[str, bytes]]:
         """Build the sequence of wake commands to try.
 
-        Returns list of (short_topic, payload) tuples. Only includes
-        fire-and-forget commands that do NOT generate field5 responses.
-        Query commands (get_base_status, get_device_info, ping) are
-        excluded because their field5 responses pollute the command
-        response queue and can cause user commands to time out.
+        Returns list of (short_topic, payload) tuples.  The first four
+        commands are passive (subscription / heartbeat).  The final
+        command is a query (get_device_base_status) that forces the
+        robot's main processor to fully wake and enter command-ready
+        mode.  Its field5 response ends up in _response_queue and is
+        harmlessly drained by send_command() before real commands.
         """
         cmds: list[tuple[str, bytes]] = []
 
@@ -509,6 +510,12 @@ class NarwalClient:
 
         # 4. app heartbeat — field 1 = 1
         cmds.append((TOPIC_CMD_APP_HEARTBEAT, self._encode_varint_field(1, 1)))
+
+        # 5. get_device_base_status — forces robot CPU into command-ready
+        #    state; passive commands alone only wake the WS server, not the
+        #    application processor.  The field5 response is drained by
+        #    send_command() before it processes real user commands.
+        cmds.append((TOPIC_CMD_GET_BASE_STATUS, b""))
 
         return cmds
 
@@ -579,10 +586,10 @@ class NarwalClient:
                     return True
                 await asyncio.sleep(0.3)
 
-            # Escalation: after 2 failed attempts, try a fresh connection.
-            # The robot's WebSocket server may need a new TCP connection to
-            # trigger its wake handler during deep sleep.
-            if attempt >= 2 and not reconnected and not self._listener_active:
+            # Escalation: after 3 failed attempts, try a fresh connection.
+            # A new TCP connection can trigger the robot's deep-sleep wake
+            # interrupt when wake bursts alone aren't enough.
+            if attempt >= 3 and not reconnected:
                 _LOGGER.info(
                     "Wake burst not working — reconnecting WebSocket "
                     "to trigger deep sleep wake"

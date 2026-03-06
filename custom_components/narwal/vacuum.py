@@ -106,16 +106,15 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
     _BROADCAST_STALE_FOR_CMD = 10.0
 
     async def _ensure_awake(self) -> None:
-        """Wake the robot and prime it for commands.
+        """Wake the robot if it is sleeping or broadcasts have gone stale.
 
         Checks both the robot_awake flag AND broadcast recency.  The robot
         can appear awake (one broadcast received) but drop back to shallow
         sleep within seconds — in that state it won't process commands.
 
-        Always sends get_status() before returning to prime the robot's
-        command pipeline. Without this the robot broadcasts passively but
-        ignores action commands like clean/plan/start. The get_status call
-        goes through send_command which properly consumes the field5 response.
+        The wake burst itself includes get_device_base_status which forces
+        the robot's main processor into command-ready state, so no separate
+        priming step is needed here.
         """
         client = self.coordinator.client
         broadcast_age = client.last_broadcast_age
@@ -127,15 +126,6 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
                 broadcast_age,
             )
             await client.wake(timeout=15.0, force=stale)
-
-        # Prime command pipeline: get_status sends get_device_base_status
-        # via send_command, which properly consumes the field5 response.
-        # This forces the robot into command-ready state — required even
-        # when robot is already broadcasting (passive != command-ready).
-        try:
-            await client.get_status(full_update=True)
-        except Exception:
-            _LOGGER.debug("Pre-command get_status failed, proceeding anyway")
 
     async def async_start(self) -> None:
         """Start or resume cleaning."""
