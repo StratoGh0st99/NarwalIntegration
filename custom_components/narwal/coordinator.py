@@ -78,8 +78,13 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
             f"{DOMAIN}_ws_listener",
         )
 
-        # Quick wake attempt (5s, not 20s — keep setup fast)
-        await self.client.wake(timeout=5.0)
+        # Wait for listener to become active — start_listening() sends an
+        # immediate wake burst on connect, but needs time to settle before
+        # wake() can rely on it to receive broadcasts.
+        await asyncio.sleep(2.0)
+
+        # Wake attempt — match state_probe.py timeout (30s) for deep sleep
+        await self.client.wake(timeout=10.0)
 
         # Always send topic subscription — wake() skips the burst if
         # the robot is already awake, which means display_map won't flow.

@@ -126,7 +126,7 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
                 client.robot_awake,
                 broadcast_age,
             )
-            if not await client.wake(timeout=15.0, force=stale):
+            if not await client.wake(timeout=20.0, force=stale):
                 raise NarwalCommandError("Robot did not wake up — cannot send command")
 
     async def async_start(self) -> None:

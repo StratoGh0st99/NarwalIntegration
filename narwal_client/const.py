@@ -98,8 +98,9 @@ HEARTBEAT_INTERVAL = 30.0  # seconds
 # Keep-alive interval — sends wake commands to prevent robot from sleeping
 KEEPALIVE_INTERVAL = 15.0  # seconds
 
-# How long without a broadcast before we consider the robot asleep again
-BROADCAST_STALE_TIMEOUT = 45.0  # seconds (~30x the 1.5s broadcast interval)
+# How long without a broadcast before we consider the robot asleep again.
+# Robot broadcasts every 1.5s when awake — 15s without one means it's asleep.
+BROADCAST_STALE_TIMEOUT = 15.0  # seconds (~10x the 1.5s broadcast interval)
 
 # Wake sequence timeout — how long to wait for robot to respond after wake burst
 WAKE_TIMEOUT = 20.0  # seconds
