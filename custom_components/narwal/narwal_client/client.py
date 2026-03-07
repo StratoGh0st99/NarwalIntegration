@@ -674,11 +674,15 @@ class NarwalClient:
                     # (e.g. after CLEANING_ALT/stuck), the regular topic resub
                     # doesn't recover it. Escalate to a full wake burst which
                     # includes notify_app_event to reset topic state.
+                    # Skip when returning to dock — display_map stops during
+                    # return and wake bursts interrupt the return sequence,
+                    # causing the robot to pause repeatedly.
                     now = time.monotonic()
                     if (
                         self._last_display_map_time > 0
                         and self.state.working_status
                         in (WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT)
+                        and not self.state.is_returning
                         and now - self._last_display_map_time
                         > DISPLAY_MAP_DROPOUT_TIMEOUT
                         and now - self._last_display_map_recovery
