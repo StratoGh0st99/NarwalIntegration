@@ -102,32 +102,17 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
     # time to load map, plan route, etc., especially after waking.
     _ACTION_TIMEOUT = 10.0
 
-    # If no broadcast in this many seconds, treat robot as shallow-sleeping
-    # even if robot_awake is True (one stale broadcast doesn't mean "ready").
-    _BROADCAST_STALE_FOR_CMD = 10.0
-
     async def _ensure_awake(self) -> None:
-        """Wake the robot if it is sleeping or broadcasts have gone stale.
+        """Wake the robot if it is not broadcasting.
 
-        Checks both the robot_awake flag AND broadcast recency.  The robot
-        can appear awake (one broadcast received) but drop back to shallow
-        sleep within seconds — in that state it won't process commands.
-
-        The wake burst itself includes get_device_base_status which forces
-        the robot's main processor into command-ready state, so no separate
-        priming step is needed here.
+        Sends a wake burst and waits for broadcasts. If the robot doesn't
+        respond, the command is still attempted — it may work even without
+        a wake confirmation (e.g., shallow sleep).
         """
         client = self.coordinator.client
-        broadcast_age = client.last_broadcast_age
-        stale = broadcast_age > self._BROADCAST_STALE_FOR_CMD
-        if not client.robot_awake or stale:
-            _LOGGER.debug(
-                "Robot not ready (awake=%s, last_broadcast=%.1fs ago) — waking",
-                client.robot_awake,
-                broadcast_age,
-            )
-            if not await client.wake(timeout=20.0, force=stale):
-                raise NarwalCommandError("Robot did not wake up — cannot send command")
+        if not client.robot_awake:
+            _LOGGER.debug("Robot not awake — sending wake burst")
+            await client.wake(timeout=10.0)
 
     async def async_start(self) -> None:
         """Start or resume cleaning."""

@@ -546,10 +546,10 @@ class NarwalClient:
     async def wake(self, timeout: float = WAKE_TIMEOUT, force: bool = False) -> bool:
         """Attempt to wake the robot from sleep.
 
-        Sends a burst of wake commands and waits for the robot to start
-        broadcasting status messages. If the first burst fails, escalates
-        by closing and reopening the WebSocket connection — a fresh
-        connection may trigger the robot's wake interrupt in deep sleep.
+        Sends repeated bursts of wake commands and waits for the robot to
+        start broadcasting status messages.  Does NOT reconnect the
+        WebSocket — the keepalive loop handles reconnect escalation
+        independently (avoids race conditions with the listener loop).
 
         Args:
             timeout: Maximum seconds to wait for the robot to respond.
@@ -566,15 +566,17 @@ class NarwalClient:
         if not self.connected:
             raise NarwalConnectionError("Not connected to vacuum")
 
-        _LOGGER.info("Attempting to wake robot...")
+        _LOGGER.info("Attempting to wake robot (timeout=%.0fs)...", timeout)
 
         deadline = asyncio.get_event_loop().time() + timeout
         attempt = 0
-        reconnected = False
 
         while asyncio.get_event_loop().time() < deadline:
             attempt += 1
-            _LOGGER.debug("Wake attempt %d", attempt)
+
+            if not self.connected:
+                _LOGGER.debug("Connection lost during wake — aborting")
+                break
 
             await self._send_wake_burst()
 
@@ -588,32 +590,6 @@ class NarwalClient:
                     _LOGGER.info("Robot woke up after %d attempt(s)", attempt)
                     return True
                 await asyncio.sleep(0.3)
-
-            # Escalation: force a fresh WebSocket connection.  A new TCP
-            # connection can trigger the robot's deep sleep wake interrupt.
-            if attempt >= 2 and not reconnected:
-                _LOGGER.info(
-                    "Wake burst not working — reconnecting WebSocket "
-                    "to trigger deep sleep wake"
-                )
-                try:
-                    if self._ws:
-                        await self._ws.close()
-                        # When the listener is active, closing the WS causes
-                        # start_listening() to reconnect and fire a wake burst
-                        # automatically.  Wait for that to complete.
-                        if self._listener_active:
-                            # Give the listener time to reconnect + wake burst
-                            await asyncio.sleep(2.0)
-                        else:
-                            self._ws = None
-                            self._connected.clear()
-                            await asyncio.sleep(0.5)
-                            await self.connect()
-                    reconnected = True
-                except Exception:
-                    _LOGGER.warning("Reconnect during wake failed")
-                    break
 
         _LOGGER.warning("Robot did not wake up within %.0fs (%d attempts)", timeout, attempt)
         return False

@@ -30,9 +30,9 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
     Primary data source is WebSocket broadcasts (every ~1.5s when awake).
     Fallback polling every 60s via get_status() in case broadcasts stop.
 
-    The robot's command responses and broadcasts both include dock indicator
-    fields (11, 47, 3.10, 3.12) — even during deep sleep. The state model
-    parses these correctly; no inference or heuristics needed.
+    Setup is kept fast: connect, try a few commands (which may time out if
+    the robot is asleep), then start the listener. The listener's keepalive
+    loop handles waking the robot — no blocking wake call during setup.
     """
 
     config_entry: ConfigEntry
@@ -56,48 +56,23 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
         self._listen_task: asyncio.Task[None] | None = None
         self._fast_poll_remaining = 0
         self._prev_working_status = WorkingStatus.UNKNOWN
-        self._status_fetch_pending = False
         self._map_fetch_pending = False
 
     async def async_setup(self) -> None:
         """Connect to the vacuum and start the WebSocket listener.
 
-        Keeps setup fast (<15s) so HA doesn't time out. If the robot is
-        asleep, entities are created with defaults and a fast re-poll
-        (every 10s) populates them once the robot wakes.
+        Queries initial state BEFORE starting the listener to avoid
+        concurrent recv issues (see 446be16). Each command is wrapped in
+        try/except so setup never crashes if the robot is asleep.
+        The listener's keepalive loop handles waking independently.
         """
         await self.client.connect()
 
-        # Set up push callback before starting listener
-        self.client.on_state_update = self._on_state_update
-
-        # Start persistent WebSocket listener as a background task.
-        self._listen_task = self.config_entry.async_create_background_task(
-            self.hass,
-            self.client.start_listening(),
-            f"{DOMAIN}_ws_listener",
-        )
-
-        # Wait for listener to become active — start_listening() sends an
-        # immediate wake burst on connect, but needs time to settle before
-        # wake() can rely on it to receive broadcasts.
-        await asyncio.sleep(2.0)
-
-        # Wake attempt — match state_probe.py timeout (30s) for deep sleep
-        await self.client.wake(timeout=10.0)
-
-        # Always send topic subscription — wake() skips the burst if
-        # the robot is already awake, which means display_map won't flow.
-        try:
-            await self.client.subscribe_to_topics()
-        except Exception:
-            _LOGGER.debug("Could not send initial topic subscription")
-
-        # Single attempt at fetching initial state
+        # Fetch initial state BEFORE starting listener (no concurrent recv)
         try:
             await self.client.get_device_info()
         except Exception:
-            _LOGGER.debug("Could not fetch device info")
+            _LOGGER.debug("Could not fetch device info at startup")
 
         try:
             await self.client.get_status(full_update=True)
@@ -109,25 +84,22 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
         except Exception:
             _LOGGER.debug("Could not fetch initial map")
 
-        # Brief wait for broadcasts if status is still unknown
-        if self.client.state.working_status == WorkingStatus.UNKNOWN:
-            for _ in range(6):  # up to 3 seconds
-                await asyncio.sleep(0.5)
-                if self.client.state.working_status != WorkingStatus.UNKNOWN:
-                    break
+        self.async_set_updated_data(self.client.state)
 
-        state = self.client.state
-
-        _LOGGER.info(
-            "Narwal startup: status=%s, battery=%d, docked=%s, "
-            "f11=%d, f47=%d, dock_sub=%d, dock_act=%d, awake=%s",
-            state.working_status.name, state.battery_level, state.is_docked,
-            state.dock_field11, state.dock_field47,
-            state.dock_sub_state, state.dock_activity,
-            self.client.robot_awake,
+        # Set up push callback and start persistent listener
+        self.client.on_state_update = self._on_state_update
+        self._listen_task = self.config_entry.async_create_background_task(
+            self.hass,
+            self.client.start_listening(),
+            f"{DOMAIN}_ws_listener",
         )
 
-        self.async_set_updated_data(state)
+        state = self.client.state
+        _LOGGER.info(
+            "Narwal startup: status=%s, battery=%d, docked=%s, awake=%s",
+            state.working_status.name, state.battery_level,
+            state.is_docked, self.client.robot_awake,
+        )
 
         # If robot didn't respond, use fast polling to catch it when it wakes
         if state.working_status == WorkingStatus.UNKNOWN:
@@ -140,15 +112,7 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
 
     def _on_state_update(self, state: NarwalState) -> None:
         """Handle a push state update from the WebSocket listener."""
-        _LOGGER.debug(
-            "Broadcast update: status=%s, docked=%s, f11=%d, f47=%d, "
-            "dock_sub=%d, dock_act=%d",
-            state.working_status.name, state.is_docked,
-            state.dock_field11, state.dock_field47,
-            state.dock_sub_state, state.dock_activity,
-        )
-
-        # Fetch static map if missing — get_map() failed at startup (robot asleep)
+        # Fetch static map if missing (get_map failed at startup)
         if state.map_data is None and not self._map_fetch_pending:
             self._map_fetch_pending = True
             self.config_entry.async_create_background_task(
@@ -157,32 +121,15 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
                 f"{DOMAIN}_map_fetch",
             )
 
-        # Robot is broadcasting but working_status is UNKNOWN — broadcasts
-        # may lack field 3 (e.g. during self-test or unmapped states).
-        # Do a one-time get_status() to get full field 3 from a command
-        # response.  Broadcasts reset the poll timer via async_set_updated_data
-        # so the normal poll never fires while broadcasts are active.
-        if state.working_status == WorkingStatus.UNKNOWN and not self._status_fetch_pending:
-            self._status_fetch_pending = True
-            self.config_entry.async_create_background_task(
-                self.hass,
-                self._fetch_initial_status(),
-                f"{DOMAIN}_status_fetch",
-            )
-
         # Detect return-to-dock transition: CLEANING/CLEANING_ALT → STANDBY.
-        # Broadcast dock fields (f11, f47) are stale after docking — they only
-        # refresh via get_status() poll. Schedule an immediate poll so the UI
-        # shows DOCKED instead of IDLE within seconds instead of up to 60s.
+        # Broadcast dock fields are stale after docking — immediate poll
+        # refreshes them so UI shows DOCKED instead of IDLE.
         if (
             state.working_status == WorkingStatus.STANDBY
             and self._prev_working_status
             in (WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT)
         ):
-            _LOGGER.info(
-                "Return-to-dock transition detected (CLEANING→STANDBY), "
-                "scheduling immediate dock status refresh"
-            )
+            _LOGGER.info("Return-to-dock detected, refreshing dock status")
             self.hass.async_create_task(self._refresh_dock_status())
         self._prev_working_status = state.working_status
 
@@ -193,16 +140,12 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
             self._fast_poll_remaining = 0
             self.update_interval = POLL_INTERVAL
             _LOGGER.info(
-                "Narwal broadcast received: status=%s — normal polling restored",
+                "Broadcast received (status=%s) — normal polling restored",
                 state.working_status.name,
             )
 
     async def _fetch_missing_map(self) -> None:
-        """Fetch static map when it's missing (get_map failed at startup).
-
-        Also re-subscribes to topics since subscription likely also failed
-        when the robot was asleep at startup.
-        """
+        """Fetch static map when it's missing (get_map failed at startup)."""
         try:
             await self.client.get_map()
             _LOGGER.info("Static map loaded (was missing at startup)")
@@ -210,45 +153,17 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
             _LOGGER.debug("Map fetch failed — will retry on next broadcast")
             self._map_fetch_pending = False
             return
-        # Re-subscribe to topics (display_map won't flow without subscription)
         try:
             await self.client.subscribe_to_topics()
-            _LOGGER.info("Topic subscription sent after map load")
         except Exception:
             _LOGGER.debug("Topic subscription failed after map load")
         self.async_set_updated_data(self.client.state)
-
-    async def _fetch_initial_status(self) -> None:
-        """One-time get_status() when broadcasts lack working_status.
-
-        Broadcasts may not contain field 3 (working_status) during certain
-        robot states (e.g. self-test, unmapped states).  Since broadcasts
-        reset the poll timer, the normal polling fallback never fires while
-        broadcasts are active.  This background task fills the gap.
-        """
-        try:
-            await self.client.get_status(full_update=True)
-            _LOGGER.info(
-                "Initial status fetched: status=%s, docked=%s",
-                self.client.state.working_status.name,
-                self.client.state.is_docked,
-            )
-            self.async_set_updated_data(self.client.state)
-        except Exception:
-            _LOGGER.debug("Initial status fetch failed — will resolve via poll")
-            self._status_fetch_pending = False
 
     async def _refresh_dock_status(self) -> None:
         """Immediate get_status() after return-to-dock to refresh dock fields."""
         try:
             await self.client.get_status(full_update=True)
             self.async_set_updated_data(self.client.state)
-            _LOGGER.info(
-                "Dock status refreshed: docked=%s, f11=%d, f47=%d",
-                self.client.state.is_docked,
-                self.client.state.dock_field11,
-                self.client.state.dock_field47,
-            )
         except Exception:
             _LOGGER.debug("Failed to refresh dock status after transition")
 
@@ -260,53 +175,30 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
             except NarwalConnectionError as err:
                 raise UpdateFailed(f"Cannot connect to vacuum: {err}") from err
 
-        # Query full status.  If the robot is asleep the command will time
-        # out — that's expected, not an error.  Return stale data so the
-        # entity stays available (sleeping on dock is normal, not a failure).
-        # The keepalive loop handles wake escalation independently.
+        # If the robot is asleep the command will time out — return stale
+        # data so entities stay available. The keepalive loop handles wake.
         try:
             await self.client.get_status(full_update=True)
         except Exception as err:
-            if not self.client.robot_awake:
-                _LOGGER.debug(
-                    "Poll skipped — robot asleep (keepalive handles wake): %s", err
-                )
-                return self.client.state
-            raise UpdateFailed(f"Failed to get status: {err}") from err
+            _LOGGER.debug("Poll failed (robot may be asleep): %s", err)
+            return self.client.state
 
-        # Retry map fetch if it failed during setup (robot was asleep)
+        # Retry map fetch if it failed during setup
         if self.client.state.map_data is None:
             try:
                 await self.client.get_map()
-                _LOGGER.info("Map data loaded on poll retry")
             except Exception:
-                _LOGGER.debug("Map fetch retry failed — will try again next poll")
-
-        state = self.client.state
-
-        _LOGGER.debug(
-            "Poll update: status=%s, docked=%s, battery=%d, "
-            "f11=%d, f47=%d, awake=%s",
-            state.working_status.name, state.is_docked,
-            state.battery_level,
-            state.dock_field11, state.dock_field47,
-            self.client.robot_awake,
-        )
+                pass
 
         # Manage fast poll countdown
         if self._fast_poll_remaining > 0:
             if self.client.state.working_status != WorkingStatus.UNKNOWN:
                 self._fast_poll_remaining = 0
                 self.update_interval = POLL_INTERVAL
-                _LOGGER.info(
-                    "Narwal poll got status=%s — normal polling restored",
-                    self.client.state.working_status.name,
-                )
             else:
                 self._fast_poll_remaining -= 1
                 if self._fast_poll_remaining <= 0:
                     self.update_interval = POLL_INTERVAL
-                    _LOGGER.info("Fast poll exhausted — normal polling restored")
 
         return self.client.state
 
