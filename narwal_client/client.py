@@ -906,21 +906,26 @@ class NarwalClient:
         """Trigger locate sound — robot says 'Robot is here'."""
         return await self.send_command(TOPIC_CMD_YELL)
 
-    async def start(self, **kwargs) -> None:
-        """Start cleaning (fire-and-forget, no field5 response expected)."""
-        if not self.connected:
-            raise NarwalConnectionError("Not connected to vacuum")
-        async with self._command_lock:
-            # Drain stale responses
-            while not self._response_queue.empty():
-                try:
-                    self._response_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-            full_topic = self._full_topic(TOPIC_CMD_START_CLEAN)
-            frame = build_frame(full_topic, b"")
-            await self._ws.send(frame)
-            _LOGGER.debug("Sent command (fire-and-forget): %s", TOPIC_CMD_START_CLEAN)
+    # Default clean task payload — derived from field 48 of robot_base_status
+    # during active cleaning (captured from Narwal app session 2026-03-07).
+    # Structure: {1: {2: {}, 5: {1: {1: 3, 2: 2, 3: 1}, 5: {}}}}
+    #   field 5.1.1 = suction level (3=max)
+    #   field 5.1.2 = mop humidity (2=wet)
+    #   field 5.1.3 = passes (1=single)
+    _DEFAULT_CLEAN_PAYLOAD = bytes.fromhex("0a0e12002a0a0a060803100218012a00")
+
+    async def start(self, **kwargs) -> CommandResponse:
+        """Start cleaning.
+
+        Sends clean/plan/start with the default clean task payload.
+        Empty payload returns NOT_APPLICABLE — the robot requires a
+        CleanTask protobuf specifying suction, mop, and pass settings.
+        """
+        return await self.send_command(
+            TOPIC_CMD_START_CLEAN,
+            payload=self._DEFAULT_CLEAN_PAYLOAD,
+            timeout=10.0,
+        )
 
     async def start_easy_clean(self) -> CommandResponse:
         """Start quick/easy clean."""

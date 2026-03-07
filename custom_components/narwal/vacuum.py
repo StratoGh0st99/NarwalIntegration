@@ -139,7 +139,16 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         if is_cleaning and state.is_paused:
             await self.coordinator.client.resume(timeout=self._ACTION_TIMEOUT)
         else:
-            await self.coordinator.client.start()
+            resp = await self.coordinator.client.start()
+            _LOGGER.info(
+                "Start command response: code=%s, success=%s",
+                resp.result_code, resp.success,
+            )
+            if not resp.success:
+                _LOGGER.warning(
+                    "Start command did not succeed (code=%s) — robot may not have started",
+                    resp.result_code,
+                )
 
     async def async_stop(self, **kwargs) -> None:
         """Stop cleaning."""
