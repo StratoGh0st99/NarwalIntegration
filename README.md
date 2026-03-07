@@ -2,7 +2,7 @@
 
 A fully **local, cloud-independent** [Home Assistant](https://www.home-assistant.io/) custom integration for Narwal robot vacuums. Communicates directly with your vacuum over your local network via WebSocket — no cloud account or internet connection required.
 
-> **Status: v0.3.0 — Early Release** — Core vacuum control, sensors, and map display are working for the Narwal Flow (AX12). Other model support is being explored. Use at your own risk.
+> **Status: v0.4.0 — Early Release** — Core vacuum control, sensors, and map display are working for the Narwal Flow (AX12). Multi-model support (Z10 Ultra) is in progress. Use at your own risk.
 
 ## Device Compatibility
 
@@ -10,14 +10,16 @@ This integration uses a **local WebSocket connection on port 9002**. Only models
 
 | Model | Internal Code | Local Port 9002 | Status | Notes |
 |-------|---------------|:---------------:|--------|-------|
-| **Narwal Flow** | AX12 | Yes | **Working** | Core vacuum control and sensors functional; map in progress |
-| **Freo Z10 Ultra** | — | Yes | **Partial** | Connects and broadcasts; state mapping and wake reliability under investigation |
+| **Narwal Flow** | AX12 | Yes | **Working** | Vacuum control, sensors, map, and live position overlay |
+| **Freo Z10 Ultra** | CX4 | Yes | **Working** | Connects, sensors, map, and commands work with model selector |
+| **Freo Z Ultra** | — | Yes | **Under Investigation** | Port 9002 open; product key needed for testing |
 | **Freo X Ultra** | AX18/AX19 | Varies | **Under Investigation** | Some units have port 9002, others use ZeroMQ on port 6789 |
 | **Freo X Plus** | — | No | **Not Supported** | Cloud-only (MQTT via Narwal servers) — no local API available |
+| **Narwal J1** | — | No (port 8080) | **Not Supported** | First-gen model, HTTP-only protocol, incompatible |
 
 ### What "Not Supported" means
 
-Models marked **Not Supported** communicate exclusively through Narwal's cloud servers. There is no local API to connect to, so this integration cannot control them. This is a hardware/firmware limitation, not something that can be fixed in software.
+Models marked **Not Supported** communicate exclusively through Narwal's cloud servers or use a completely different protocol. There is no compatible local API to connect to, so this integration cannot control them. This is a hardware/firmware limitation, not something that can be fixed in software.
 
 ### Other models
 
@@ -28,6 +30,15 @@ nmap -p 9002 <your-vacuum-ip>
 ```
 
 If port 9002 is open, please [open an issue](https://github.com/sjmotew/NarwalIntegration/issues/new/choose) with your model name and nmap results — we'd love to test it.
+
+## What's New in v0.4.0
+
+- **Model selector** — Config flow now asks which Narwal model you have (Flow, Z10 Ultra, or Auto-detect). The correct product key is saved and persists across HA restarts, fixing connection instability on non-Flow models.
+- **Start command fix** — Start cleaning now sends a proper CleanTask payload (suction, mop, passes) instead of an empty payload that was silently ignored.
+- **Return-to-dock fix** — Fixed keepalive wake bursts interrupting the return-to-dock sequence, causing the robot to pause repeatedly.
+- **Charging state sensor** — Enum sensor showing Charging, Fully Charged, or Not Charging.
+- **Wake system hardened** — Immediate wake burst on reconnect, deep-sleep escalation after 30s, commands blocked when robot won't wake.
+- **Entity stays available** — Entities show stale data when robot sleeps instead of going unavailable.
 
 ## Features
 
@@ -43,6 +54,7 @@ If port 9002 is open, please [open an issue](https://github.com/sjmotew/NarwalIn
 - **Cleaning time** — current session duration (only populated during active cleaning)
 - **Firmware version** — diagnostic sensor
 - **Docked status** — binary sensor (on dock / off dock)
+- **Charging state** — Charging, Fully Charged, or Not Charging
 
 ### Map (In Progress)
 - **Floor plan image** — basic color-coded room map rendered from robot's stored map data
@@ -80,10 +92,12 @@ If port 9002 is open, please [open an issue](https://github.com/sjmotew/NarwalIn
 
 1. Go to **Settings > Devices & Services > Add Integration**.
 2. Search for **Narwal Flow Robot Vacuum**.
-3. Enter your vacuum's **IP address** (find it in your router's DHCP table or the Narwal app).
+3. Enter your vacuum's **IP address** and **select your model** from the dropdown.
 4. The integration will connect, discover the device, and create all entities automatically.
 
 > **Tip:** Assign a static IP to your vacuum in your router settings so the address doesn't change.
+
+> **Upgrading from v0.3.x:** Existing config entries auto-migrate. If you have a Z10 Ultra, remove and re-add the integration to select the correct model.
 
 ## Requirements
 
@@ -112,11 +126,13 @@ A keepalive heartbeat runs every 15 seconds to help prevent the robot from going
 - Cleaning area and cleaning time sensors (populated during active cleaning only)
 - Firmware version sensor
 - Docked status detection
+- Charging state sensor
 
 ### In Progress
 - **Map rendering** — A basic floor plan image is generated from the robot's stored map data. However, dock position overlay is not consistently accurate, the robot may return a stale/outdated map, and room labels need work. This feature is actively being improved.
 - **Fan speed** — You can set fan speed, but the robot does not broadcast its current level. The integration tracks the last value you set; changes made via the Narwal app won't be reflected.
 - **Live map updates** — The robot sends position broadcasts during cleaning, but real-time map overlay needs more testing.
+- **Command validation** — Comprehensive testing of all command/state combinations is in progress.
 
 ### Not Yet Implemented
 - **Room-specific cleaning** — The protocol supports it, but the room selection payload format needs further decoding.
@@ -128,6 +144,7 @@ A keepalive heartbeat runs every 15 seconds to help prevent the robot from going
 - **Single connection** — The vacuum only handles one WebSocket connection reliably. Close the Narwal app before using the HA integration to avoid interference.
 - **Map may be stale** — The robot can return an old map from a previous layout. Running a new clean cycle typically refreshes it.
 - **Local network only** — Your HA instance must be on the same network as the vacuum.
+- **Start sends default clean settings** — Start always uses max suction, wet mop, single pass. Custom clean settings are not yet configurable from HA.
 
 ## Troubleshooting
 
@@ -139,6 +156,7 @@ A keepalive heartbeat runs every 15 seconds to help prevent the robot from going
 | Commands not responding | Ensure the Narwal app is closed — two simultaneous WebSocket connections cause issues. |
 | Fan speed shows unknown | Set fan speed once from HA; it will track from that point. The robot doesn't broadcast this value. |
 | Docked status wrong | The integration uses multiple signals to detect dock status. If you see issues, please [report a bug](https://github.com/sjmotew/NarwalIntegration/issues/new/choose) with debug logs. |
+| Z10 Ultra disconnects on restart | Upgrade to v0.4.0 and re-add the integration with the correct model selected. |
 
 ## Reporting Issues
 
@@ -156,7 +174,7 @@ This is an **unofficial**, community-developed integration. It is not affiliated
 
 Contributions and testing are welcome! Please open an issue or pull request on [GitHub](https://github.com/sjmotew/NarwalIntegration).
 
-If you have a Narwal model other than the Flow (AX12), testing reports are especially valuable — but please note that our current priority is stabilizing the Flow integration before expanding to other models.
+If you have a Narwal model other than the Flow (AX12), testing reports are especially valuable — but please note that our current priority is stabilizing command infrastructure before expanding to other models.
 
 ## License
 
