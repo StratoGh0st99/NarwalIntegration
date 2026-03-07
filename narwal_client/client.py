@@ -712,11 +712,17 @@ class NarwalClient:
                         except Exception:
                             _LOGGER.debug("Topic re-subscribe failed")
 
-                    # Robot is awake — send lightweight heartbeat, but ONLY
-                    # when idle/docked. During cleaning the robot stays awake
-                    # on its own, and heartbeats can cause it to pause.
-                    if self.state.working_status not in (
-                        WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
+                    # Robot is awake — send lightweight heartbeat, but NOT
+                    # during active cleaning. The robot stays awake on its own
+                    # while cleaning, and heartbeats can cause it to pause.
+                    # DO send heartbeats when paused (even though working_status
+                    # stays CLEANING) — without them the robot falls into deep
+                    # sleep and becomes unreachable.
+                    if (
+                        self.state.working_status not in (
+                            WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
+                        )
+                        or self.state.is_paused
                     ):
                         try:
                             payload = self._encode_varint_field(1, 1)
