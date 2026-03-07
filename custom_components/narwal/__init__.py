@@ -2,15 +2,37 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TypeAlias
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import PLATFORMS
+from .const import CONF_MODEL, CONF_PRODUCT_KEY, PLATFORMS
 from .coordinator import NarwalCoordinator
 
+_LOGGER = logging.getLogger(__name__)
+
 NarwalConfigEntry: TypeAlias = ConfigEntry[NarwalCoordinator]
+
+
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate old config entries to version 2 (add product_key)."""
+    if config_entry.version < 2:
+        _LOGGER.info(
+            "Migrating Narwal config entry from version %d to 2",
+            config_entry.version,
+        )
+        new_data = {**config_entry.data}
+        if CONF_PRODUCT_KEY not in new_data:
+            new_data[CONF_PRODUCT_KEY] = "QoEsI5qYXO"
+        if CONF_MODEL not in new_data:
+            new_data[CONF_MODEL] = "Narwal Flow"
+        hass.config_entries.async_update_entry(
+            config_entry, data=new_data, version=2,
+        )
+        _LOGGER.info("Migration complete: product_key=%s", new_data[CONF_PRODUCT_KEY])
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: NarwalConfigEntry) -> bool:

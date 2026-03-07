@@ -45,10 +45,13 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
             name=DOMAIN,
             update_interval=POLL_INTERVAL,
         )
+        product_key = entry.data.get("product_key")
+        topic_prefix = f"/{product_key}" if product_key else None
         self.client = NarwalClient(
             host=entry.data["host"],
             port=entry.data["port"],
             device_id=entry.data.get("device_id", ""),
+            topic_prefix=topic_prefix,
         )
         self._listen_task: asyncio.Task[None] | None = None
         self._fast_poll_remaining = 0

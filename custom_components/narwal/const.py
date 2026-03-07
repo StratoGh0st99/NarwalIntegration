@@ -10,6 +10,18 @@ DEFAULT_PORT = 9002
 MANUFACTURER = "Narwal"
 MODEL = "Flow (AX12)"
 
+# Model selector for config flow.
+# Keys are user-facing labels; values are product key prefixes.
+# "auto" cycles all known keys during discovery (slower, fallback).
+NARWAL_MODELS: dict[str, str] = {
+    "Narwal Flow": "QoEsI5qYXO",
+    "Narwal Freo Z10 Ultra": "DrzDKQ0MU8",
+    "Other / Auto-detect": "auto",
+}
+
+CONF_MODEL = "model"
+CONF_PRODUCT_KEY = "product_key"
+
 PLATFORMS: list[Platform] = [
     Platform.VACUUM,
     Platform.SENSOR,

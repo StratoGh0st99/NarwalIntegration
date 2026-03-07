@@ -90,12 +90,13 @@ class NarwalClient:
         host: str,
         port: int = DEFAULT_PORT,
         device_id: str = "",
+        topic_prefix: str | None = None,
     ) -> None:
         self.host = host
         self.port = port
         self.device_id = device_id
         self.url = f"ws://{host}:{port}"
-        self.topic_prefix = DEFAULT_TOPIC_PREFIX  # updated by get_device_info()
+        self.topic_prefix = topic_prefix or DEFAULT_TOPIC_PREFIX
         self.state = NarwalState()
         self.on_state_update: Callable[[NarwalState], None] | None = None
         self.on_message: Callable[[NarwalMessage], None] | None = None
