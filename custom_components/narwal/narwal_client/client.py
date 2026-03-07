@@ -16,8 +16,6 @@ from .const import (
     BROADCAST_STALE_TIMEOUT,
     COMMAND_RESPONSE_TIMEOUT,
     DEFAULT_PORT,
-    DISPLAY_MAP_DROPOUT_TIMEOUT,
-    DISPLAY_MAP_RECOVERY_COOLDOWN,
     HEARTBEAT_INTERVAL,
     KEEPALIVE_INTERVAL,
     KNOWN_PRODUCT_KEYS,
@@ -51,7 +49,6 @@ from .const import (
     WAKE_TIMEOUT,
     FanLevel,
     MopHumidity,
-    WorkingStatus,
 )
 from .models import CommandResponse, DeviceInfo, MapData, MapDisplayData, NarwalState
 from .protocol import (
@@ -111,7 +108,6 @@ class NarwalClient:
         self._robot_awake = False  # True once we receive a broadcast
         self._last_broadcast_time: float = 0.0  # monotonic time of last broadcast
         self._last_display_map_time: float = 0.0  # monotonic time of last display_map
-        self._last_display_map_recovery: float = 0.0  # last recovery attempt
         # Queue for field5 command responses
         self._response_queue: asyncio.Queue[NarwalMessage] = asyncio.Queue()
         # Lock to prevent concurrent send_command calls from racing on the queue
@@ -593,12 +589,9 @@ class NarwalClient:
                     return True
                 await asyncio.sleep(0.3)
 
-            # Escalation: try a fresh connection if the listener loop isn't
-            # running (standalone wake).  When the listener IS active, the
-            # keepalive loop handles reconnect escalation — doing it here
-            # would race with the listener's own reconnect and reset the
-            # keepalive's failure counter.
-            if attempt >= 2 and not reconnected and not self._listener_active:
+            # Escalation: force a fresh WebSocket connection.  A new TCP
+            # connection can trigger the robot's deep sleep wake interrupt.
+            if attempt >= 2 and not reconnected:
                 _LOGGER.info(
                     "Wake burst not working — reconnecting WebSocket "
                     "to trigger deep sleep wake"
@@ -606,10 +599,17 @@ class NarwalClient:
                 try:
                     if self._ws:
                         await self._ws.close()
-                        self._ws = None
-                        self._connected.clear()
-                    await asyncio.sleep(0.5)
-                    await self.connect()
+                        # When the listener is active, closing the WS causes
+                        # start_listening() to reconnect and fire a wake burst
+                        # automatically.  Wait for that to complete.
+                        if self._listener_active:
+                            # Give the listener time to reconnect + wake burst
+                            await asyncio.sleep(2.0)
+                        else:
+                            self._ws = None
+                            self._connected.clear()
+                            await asyncio.sleep(0.5)
+                            await self.connect()
                     reconnected = True
                 except Exception:
                     _LOGGER.warning("Reconnect during wake failed")
@@ -669,36 +669,8 @@ class NarwalClient:
 
                 if self._robot_awake:
                     consecutive_wake_failures = 0
-                    # Detect display_map dropout during cleaning.
-                    # If the robot is cleaning but display_map stopped arriving
-                    # (e.g. after CLEANING_ALT/stuck), the regular topic resub
-                    # doesn't recover it. Escalate to a full wake burst which
-                    # includes notify_app_event to reset topic state.
-                    # Skip when returning to dock — display_map stops during
-                    # return and wake bursts interrupt the return sequence,
-                    # causing the robot to pause repeatedly.
-                    now = time.monotonic()
-                    if (
-                        self._last_display_map_time > 0
-                        and self.state.working_status
-                        in (WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT)
-                        and not self.state.is_returning
-                        and now - self._last_display_map_time
-                        > DISPLAY_MAP_DROPOUT_TIMEOUT
-                        and now - self._last_display_map_recovery
-                        > DISPLAY_MAP_RECOVERY_COOLDOWN
-                    ):
-                        _LOGGER.warning(
-                            "display_map dropout: %.0fs since last during %s "
-                            "— sending full wake burst to recover",
-                            now - self._last_display_map_time,
-                            self.state.working_status.name,
-                        )
-                        await self._send_wake_burst()
-                        self._last_display_map_recovery = now
-                        last_resub_time = now
                     # Re-subscribe to topics before the subscription expires
-                    elif time.monotonic() - last_resub_time > self._TOPIC_RESUB_INTERVAL:
+                    if time.monotonic() - last_resub_time > self._TOPIC_RESUB_INTERVAL:
                         try:
                             payload = self._build_topic_subscription(
                                 self._TOPIC_SUB_DURATION
@@ -712,28 +684,19 @@ class NarwalClient:
                         except Exception:
                             _LOGGER.debug("Topic re-subscribe failed")
 
-                    # Robot is awake — send lightweight heartbeat, but NOT
-                    # during active cleaning. The robot stays awake on its own
-                    # while cleaning, and heartbeats can cause it to pause.
-                    # DO send heartbeats when paused (even though working_status
-                    # stays CLEANING) — without them the robot falls into deep
-                    # sleep and becomes unreachable.
-                    if (
-                        self.state.working_status not in (
-                            WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
+                    # Send lightweight heartbeat to keep robot awake.
+                    # The Narwal app sends this continuously regardless of
+                    # robot state — it's safe during cleaning.
+                    try:
+                        payload = self._encode_varint_field(1, 1)
+                        frame = build_frame(
+                            self._full_topic(TOPIC_CMD_APP_HEARTBEAT), payload
                         )
-                        or self.state.is_paused
-                    ):
-                        try:
-                            payload = self._encode_varint_field(1, 1)
-                            frame = build_frame(
-                                self._full_topic(TOPIC_CMD_APP_HEARTBEAT), payload
-                            )
-                            await self._ws.send(frame)
-                            _LOGGER.debug("Keepalive heartbeat sent")
-                        except Exception:
-                            _LOGGER.debug("Keepalive send failed")
-                            break
+                        await self._ws.send(frame)
+                        _LOGGER.debug("Keepalive heartbeat sent")
+                    except Exception:
+                        _LOGGER.debug("Keepalive send failed")
+                        break
                 else:
                     # Robot appears asleep — send full wake burst
                     # (wake burst includes topic subscription)
