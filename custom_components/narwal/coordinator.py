@@ -252,14 +252,18 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
             except NarwalConnectionError as err:
                 raise UpdateFailed(f"Cannot connect to vacuum: {err}") from err
 
-        # Try to wake the robot if not broadcasting
-        if not self.client.robot_awake:
-            await self.client.wake(timeout=20.0)
-
-        # Query full status — response includes dock fields even in deep sleep
+        # Query full status.  If the robot is asleep the command will time
+        # out — that's expected, not an error.  Return stale data so the
+        # entity stays available (sleeping on dock is normal, not a failure).
+        # The keepalive loop handles wake escalation independently.
         try:
             await self.client.get_status(full_update=True)
         except Exception as err:
+            if not self.client.robot_awake:
+                _LOGGER.debug(
+                    "Poll skipped — robot asleep (keepalive handles wake): %s", err
+                )
+                return self.client.state
             raise UpdateFailed(f"Failed to get status: {err}") from err
 
         # Retry map fetch if it failed during setup (robot was asleep)

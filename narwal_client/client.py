@@ -586,10 +586,12 @@ class NarwalClient:
                     return True
                 await asyncio.sleep(0.3)
 
-            # Escalation: after 3 failed attempts, try a fresh connection.
-            # A new TCP connection can trigger the robot's deep-sleep wake
-            # interrupt when wake bursts alone aren't enough.
-            if attempt >= 3 and not reconnected:
+            # Escalation: try a fresh connection if the listener loop isn't
+            # running (standalone wake).  When the listener IS active, the
+            # keepalive loop handles reconnect escalation — doing it here
+            # would race with the listener's own reconnect and reset the
+            # keepalive's failure counter.
+            if attempt >= 2 and not reconnected and not self._listener_active:
                 _LOGGER.info(
                     "Wake burst not working — reconnecting WebSocket "
                     "to trigger deep sleep wake"
@@ -616,7 +618,7 @@ class NarwalClient:
     # After this many consecutive wake bursts without response (~60s),
     # force a WebSocket reconnect to try triggering the robot's deep sleep
     # wake handler via a fresh TCP connection.
-    _WAKE_RECONNECT_THRESHOLD = 4
+    _WAKE_RECONNECT_THRESHOLD = 2
 
     async def _keepalive_loop(self) -> None:
         """Periodically send wake/heartbeat commands to prevent robot from sleeping.
