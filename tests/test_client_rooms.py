@@ -13,40 +13,42 @@ from narwal_client.client import NarwalClient
 class TestBuildRoomCleanPayload:
     """Tests for _build_room_clean_payload protobuf encoding."""
 
-    def test_single_room_encodes_room_id(self) -> None:
-        """Single room ID appears in decoded field 1.2."""
+    def test_single_room_encodes_room_id_and_params(self) -> None:
+        """Single room has roomId + clean params in field 1.2."""
         import blackboxprotobuf
 
         client = NarwalClient("127.0.0.1")
         payload = client._build_room_clean_payload([11])
         decoded, _ = blackboxprotobuf.decode_message(payload)
 
-        # field 1.2 should contain the room ID(s)
-        field1 = decoded["1"]
-        field1_2 = field1["2"]
-        # For a single room, field 1.2.1 should be the room id
-        room_ids = field1_2["1"]
-        if isinstance(room_ids, list):
-            assert 11 in room_ids
-        else:
-            assert room_ids == 11
+        field1_2 = decoded["1"]["2"]
+        # Single room: field 1.2.1 = roomId
+        assert field1_2["1"] == 11
+        # Per-room clean params must be present (robot ignores bare roomId)
+        assert field1_2["2"] == 2, "cleanMode should be 2 (sweep+mop)"
+        assert field1_2["3"] == 1, "cleanTimes should be 1"
+        assert field1_2["6"] == 3, "sweepMode should be 3 (max suction)"
+        assert field1_2["7"] == 2, "mopMode should be 2 (wet)"
 
-    def test_multiple_rooms_encodes_all_ids(self) -> None:
-        """Multiple room IDs all appear in decoded field 1.2.1 as repeated field."""
+    def test_multiple_rooms_encodes_all(self) -> None:
+        """Multiple rooms encode as repeated messages in field 1.2."""
         import blackboxprotobuf
 
         client = NarwalClient("127.0.0.1")
         payload = client._build_room_clean_payload([11, 9])
         decoded, _ = blackboxprotobuf.decode_message(payload)
 
-        field1 = decoded["1"]
-        field1_2 = field1["2"]
-        room_ids = field1_2["1"]
-        assert isinstance(room_ids, list), "Multiple room IDs should be a list"
+        field1_2 = decoded["1"]["2"]
+        assert isinstance(field1_2, list), "Multiple rooms should be a list"
+        room_ids = [entry["1"] for entry in field1_2]
         assert 11 in room_ids
         assert 9 in room_ids
+        # Each entry has clean params
+        for entry in field1_2:
+            assert entry["2"] == 2, "cleanMode"
+            assert entry["6"] == 3, "sweepMode"
 
-    def test_preserves_clean_settings(self) -> None:
+    def test_preserves_global_clean_settings(self) -> None:
         """Payload preserves suction=3, mop=2, passes=1 in field 1.5."""
         import blackboxprotobuf
 
@@ -54,9 +56,7 @@ class TestBuildRoomCleanPayload:
         payload = client._build_room_clean_payload([11])
         decoded, _ = blackboxprotobuf.decode_message(payload)
 
-        field1 = decoded["1"]
-        field1_5 = field1["5"]
-        settings = field1_5["1"]
+        settings = decoded["1"]["5"]["1"]
         assert settings["1"] == 3, "Suction should be 3 (max)"
         assert settings["2"] == 2, "Mop humidity should be 2 (wet)"
         assert settings["3"] == 1, "Passes should be 1 (single)"

@@ -890,13 +890,17 @@ class NarwalClient:
         )
 
     def _build_room_clean_payload(self, room_ids: list[int]) -> bytes:
-        """Build CleanTask protobuf with room selection in field 1.2.
+        """Build CleanTask protobuf with per-room clean params in field 1.2.
 
-        Structure: same as _DEFAULT_CLEAN_PAYLOAD but with room IDs
-        in field 1.2 (empty for whole-house, populated for room-specific).
+        Each room entry in field 1.2 requires full MapCleanParamInfo fields
+        (from APK proto analysis):
+          field 1: roomId (uint32)
+          field 2: cleanMode (int32) — 0=sweep, 1=mop, 2=sweep+mop
+          field 3: cleanTimes (int32) — number of passes
+          field 6: sweepMode (int32) — suction level (3=max)
+          field 7: mopMode (int32) — mop humidity (2=wet)
 
-        Uses blackboxprotobuf.encode_message() with an explicit typedef
-        to ensure room_ids encodes as a repeated varint field.
+        A bare roomId without clean params is silently ignored by the robot.
 
         Args:
             room_ids: List of room IDs from RoomInfo.room_id.
@@ -909,9 +913,35 @@ class NarwalClient:
 
         import blackboxprotobuf
 
+        # Build per-room entries with default clean settings
+        room_entries = []
+        for rid in room_ids:
+            room_entries.append({
+                "1": rid,       # roomId
+                "2": 2,         # cleanMode = sweep+mop
+                "3": 1,         # cleanTimes = 1 pass
+                "6": 3,         # sweepMode = max suction
+                "7": 2,         # mopMode = wet
+            })
+
+        room_typedef = {
+            "type": "message",
+            "seen_repeated": True,
+            "message_typedef": {
+                "1": {"type": "uint"},
+                "2": {"type": "int"},
+                "3": {"type": "int"},
+                "6": {"type": "int"},
+                "7": {"type": "int"},
+            }
+        }
+
+        # Single room: field 1.2 is a message; multiple: repeated message
+        field_2_value = room_entries[0] if len(room_entries) == 1 else room_entries
+
         msg = {
             "1": {
-                "2": {"1": room_ids},
+                "2": field_2_value,
                 "5": {
                     "1": {"1": 3, "2": 2, "3": 1},
                     "5": {}
@@ -922,12 +952,7 @@ class NarwalClient:
             "1": {
                 "type": "message",
                 "message_typedef": {
-                    "2": {
-                        "type": "message",
-                        "message_typedef": {
-                            "1": {"type": "int", "seen_repeated": True}
-                        }
-                    },
+                    "2": room_typedef,
                     "5": {
                         "type": "message",
                         "message_typedef": {
