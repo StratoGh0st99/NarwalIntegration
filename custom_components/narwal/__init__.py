@@ -7,9 +7,11 @@ from typing import TypeAlias
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 
 from .const import CONF_MODEL, CONF_PRODUCT_KEY, PLATFORMS
 from .coordinator import NarwalCoordinator
+from .narwal_client import NarwalConnectionError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,7 +40,12 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 async def async_setup_entry(hass: HomeAssistant, entry: NarwalConfigEntry) -> bool:
     """Set up Narwal from a config entry."""
     coordinator = NarwalCoordinator(hass, entry)
-    await coordinator.async_setup()
+    try:
+        await coordinator.async_setup()
+    except NarwalConnectionError as err:
+        raise ConfigEntryNotReady(
+            f"Cannot connect to Narwal vacuum at {entry.data['host']}: {err}"
+        ) from err
 
     entry.runtime_data = coordinator
 

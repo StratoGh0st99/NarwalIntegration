@@ -29,4 +29,4 @@ class NarwalEntity(CoordinatorEntity[NarwalCoordinator]):
     @property
     def available(self) -> bool:
         """Return True if the entity is available."""
-        return super().available and self.coordinator.client.connected
+        return self.coordinator.last_update_success
