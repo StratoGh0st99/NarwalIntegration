@@ -291,9 +291,8 @@ class NarwalMapCamera(NarwalEntity, Camera):
                         # Compare display_map dock ref (field 5) with static map dock
                         dock_ref_grid_x = dock_ref_grid_y = None
                         if display.dock_ref_x != 0.0 or display.dock_ref_y != 0.0:
-                            cm_pp = static_map.resolution / 10
-                            dock_ref_grid_x = (display.dock_ref_x * 10) / cm_pp - static_map.origin_x
-                            dock_ref_grid_y = (display.dock_ref_y * 10) / cm_pp - static_map.origin_y
+                            dock_ref_grid_x = display.dock_ref_x - static_map.origin_x
+                            dock_ref_grid_y = display.dock_ref_y - static_map.origin_y
                         # Room lookup at robot grid position
                         from .narwal_client.map_renderer import lookup_room_at_grid
                         robot_rid, robot_room = lookup_room_at_grid(

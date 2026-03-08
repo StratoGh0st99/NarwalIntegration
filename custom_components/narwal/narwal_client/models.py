@@ -152,20 +152,18 @@ class MapData:
         resolution = int(payload.get("3", 0))
 
         # Extract origin offsets from field 6 (coordinate transform).
-        # Field 6: {1: origin_x, 2: ?, 3: origin_y, 4: resolution}
-        # These convert world coordinates (dm) to grid pixel coordinates:
-        #   pixel_x = (x_dm * 10) / cm_per_pixel - origin_x
-        #   pixel_y = (y_dm * 10) / cm_per_pixel - origin_y
+        # Field 6: {1: origin_y, 2: ?, 3: origin_x, 4: resolution}
+        # Positions are in grid-offset units: pixel = raw - origin
         origin_x = 0
         origin_y = 0
         field6 = payload.get("6")
         if isinstance(field6, dict):
             try:
-                origin_x = int(field6.get("1", 0))
+                origin_x = int(field6.get("3", 0))
             except (ValueError, TypeError):
                 pass
             try:
-                origin_y = int(field6.get("3", 0))
+                origin_y = int(field6.get("1", 0))
             except (ValueError, TypeError):
                 pass
 
@@ -184,9 +182,8 @@ class MapData:
                     x_dm = _to_float32(pos["1"])
                     y_dm = _to_float32(pos["2"])
                     if x_dm is not None and y_dm is not None:
-                        cm_per_pixel = resolution / 10  # 60mm/px = 6cm/px
-                        dock_x = (x_dm * 10) / cm_per_pixel - origin_x
-                        dock_y = (y_dm * 10) / cm_per_pixel - origin_y
+                        dock_x = x_dm - origin_x
+                        dock_y = y_dm - origin_y
                 except (struct.error, OverflowError, ValueError, TypeError):
                     pass
 
@@ -252,10 +249,9 @@ class MapDisplayData:
             return None
         if resolution <= 0:
             return None
-        cm_per_pixel = resolution / 10  # 60mm/px = 6cm/px
-        # display_map positions are in decimeters; *10 converts to cm
-        px = (self.robot_x * 10) / cm_per_pixel - origin_x
-        py = (self.robot_y * 10) / cm_per_pixel - origin_y
+        # Positions are in grid-offset units: pixel = raw - origin
+        px = self.robot_x - origin_x
+        py = self.robot_y - origin_y
         return (px, py)
 
     @classmethod
