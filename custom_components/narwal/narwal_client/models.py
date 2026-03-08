@@ -447,6 +447,11 @@ class NarwalState:
           {1=4, 7=1, 10=2} — working_status stays CLEANING(4),
           field 7=1 (returning flag), field 10=2 (docking in progress).
 
+        Requires BOTH field 3.7=1 AND field 3.10=2 to avoid false
+        positives — either field alone can be stale during normal
+        cleaning (confirmed 2026-03-08: robot cleaning in Pantry
+        showed returning=True from a single stale field).
+
         Only valid while working_status is CLEANING — once the robot
         transitions to STANDBY/DOCKED/CHARGED, it has already docked
         even if field 3.7 is momentarily still set.
@@ -455,11 +460,7 @@ class NarwalState:
             WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
         ):
             return False
-        if self.is_returning_to_dock:
-            return True
-        if self.dock_sub_state == 2:
-            return True
-        return False
+        return self.is_returning_to_dock and self.dock_sub_state == 2
 
     def update_from_working_status(self, decoded: dict[str, Any]) -> None:
         """Update state from a decoded working_status message.
