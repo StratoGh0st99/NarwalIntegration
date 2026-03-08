@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import logging
 
+from typing import Any
+
 from homeassistant.components.vacuum import (
+    Segment,
     StateVacuumEntity,
     VacuumActivity,
     VacuumEntityFeature,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .narwal_client import FanLevel, NarwalCommandError, WorkingStatus
@@ -53,6 +56,7 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         | VacuumEntityFeature.RETURN_HOME
         | VacuumEntityFeature.FAN_SPEED
         | VacuumEntityFeature.LOCATE
+        | VacuumEntityFeature.CLEAN_AREA
     )
     _attr_fan_speed_list = FAN_SPEED_LIST
 
@@ -172,3 +176,79 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
             await self.coordinator.client.set_fan_speed(level)
             self._last_fan_speed = fan_speed
             self.async_write_ha_state()
+
+    # --- Segment API (HA 2026.3 room-specific cleaning) ---
+
+    async def async_get_segments(self) -> list[Segment]:
+        """Return cleanable room segments from map data.
+
+        Maps RoomInfo from get_map to HA Segment objects.
+        Room names match the Narwal app exactly (RoomInfo.display_name).
+        Returns [] when map data is not yet loaded (robot asleep at startup).
+        """
+        state = self.coordinator.data
+        if state is None or state.map_data is None:
+            return []
+        return [
+            Segment(
+                id=str(room.room_id),
+                name=room.display_name,
+                group="Rooms" if room.category == 1 else "Utility" if room.category == 2 else None,
+            )
+            for room in state.map_data.rooms
+            if room.room_id > 0
+        ]
+
+    async def async_clean_segments(
+        self, segment_ids: list[str], **kwargs: Any
+    ) -> None:
+        """Clean specific rooms by segment IDs.
+
+        Converts string segment IDs back to integer room IDs and sends
+        a room-specific clean command to the robot.
+        """
+        await self._ensure_awake()
+        room_ids = [int(sid) for sid in segment_ids]
+        _LOGGER.info("Starting room-specific clean: rooms=%s", room_ids)
+        resp = await self.coordinator.client.start_rooms(room_ids)
+        _LOGGER.info(
+            "Room clean response: code=%s, success=%s, rooms=%s",
+            resp.result_code, resp.success, room_ids,
+        )
+        if not resp.success:
+            _LOGGER.warning(
+                "Room clean did not succeed (code=%s, rooms=%s)",
+                resp.result_code, room_ids,
+            )
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self._check_segment_changes()
+        super()._handle_coordinator_update()
+
+    def _check_segment_changes(self) -> None:
+        """Detect segment changes and raise repair issue if needed.
+
+        Compares current room data against last_seen_segments (managed by HA).
+        If rooms have changed (added, removed, or renamed), creates a repair
+        issue so the user can update their segment-to-area mappings.
+        """
+        last = self.last_seen_segments
+        if last is None:
+            return  # No mapping configured yet
+        state = self.coordinator.data
+        if state is None or state.map_data is None:
+            return
+        current_set = {
+            (str(r.room_id), r.display_name)
+            for r in state.map_data.rooms
+            if r.room_id > 0
+        }
+        last_set = {(s.id, s.name) for s in last}
+        if current_set != last_set:
+            _LOGGER.info(
+                "Segment change detected: %d -> %d rooms",
+                len(last_set), len(current_set),
+            )
+            self.async_create_segments_issue()

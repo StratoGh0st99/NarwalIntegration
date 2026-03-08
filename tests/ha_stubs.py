@@ -106,6 +106,7 @@ def install() -> None:
     ha_comp = _mod("homeassistant.components", ha)
 
     ha_vac = _mod("homeassistant.components.vacuum", ha_comp)
+    ha_vac.Segment = MagicMock  # type: ignore[attr-defined]
     ha_vac.StateVacuumEntity = MagicMock  # type: ignore[attr-defined]
     ha_vac.VacuumActivity = MagicMock  # type: ignore[attr-defined]
     ha_vac.VacuumEntityFeature = MagicMock  # type: ignore[attr-defined]
