@@ -778,12 +778,13 @@ class NarwalClient:
             decoded = {}
 
         # Field 1 is a result code for action commands (int),
-        # but data for some query commands (string/bytes).
+        # but data for some query commands (string/bytes/dict).
+        # Room-clean returns field 1 as a dict (config echo), not an int.
         raw_field1 = decoded.get("1", 0)
         try:
             result_code = int(raw_field1)
         except (ValueError, TypeError):
-            result_code = 0  # treat non-int field 1 as success (data response)
+            result_code = CommandResult.SUCCESS  # non-int field 1 = data response = success
 
         return CommandResponse(
             result_code=result_code,
