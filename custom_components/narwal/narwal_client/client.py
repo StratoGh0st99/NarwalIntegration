@@ -889,6 +889,86 @@ class NarwalClient:
             timeout=10.0,
         )
 
+    def _build_room_clean_payload(self, room_ids: list[int]) -> bytes:
+        """Build CleanTask protobuf with room selection in field 1.2.
+
+        Structure: same as _DEFAULT_CLEAN_PAYLOAD but with room IDs
+        in field 1.2 (empty for whole-house, populated for room-specific).
+
+        Uses blackboxprotobuf.encode_message() with an explicit typedef
+        to ensure room_ids encodes as a repeated varint field.
+
+        Args:
+            room_ids: List of room IDs from RoomInfo.room_id.
+
+        Returns:
+            Encoded protobuf bytes for clean/plan/start.
+        """
+        if not room_ids:
+            return self._DEFAULT_CLEAN_PAYLOAD
+
+        import blackboxprotobuf
+
+        msg = {
+            "1": {
+                "2": {"1": room_ids},
+                "5": {
+                    "1": {"1": 3, "2": 2, "3": 1},
+                    "5": {}
+                }
+            }
+        }
+        typedef = {
+            "1": {
+                "type": "message",
+                "message_typedef": {
+                    "2": {
+                        "type": "message",
+                        "message_typedef": {
+                            "1": {"type": "int", "seen_repeated": True}
+                        }
+                    },
+                    "5": {
+                        "type": "message",
+                        "message_typedef": {
+                            "1": {
+                                "type": "message",
+                                "message_typedef": {
+                                    "1": {"type": "int"},
+                                    "2": {"type": "int"},
+                                    "3": {"type": "int"}
+                                }
+                            },
+                            "5": {"type": "message", "message_typedef": {}}
+                        }
+                    }
+                }
+            }
+        }
+        return blackboxprotobuf.encode_message(msg, typedef)
+
+    async def start_rooms(self, room_ids: list[int]) -> CommandResponse:
+        """Start room-specific cleaning.
+
+        Sends clean/plan/start with room IDs in the CleanTask payload.
+        Uses same topic as whole-house clean but with room selection data
+        in field 1.2 (empty for whole-house, populated for room-specific).
+
+        Args:
+            room_ids: List of room IDs from RoomInfo.room_id.
+
+        Returns:
+            CommandResponse with result code.
+        """
+        if not room_ids:
+            return await self.start()
+        payload = self._build_room_clean_payload(room_ids)
+        return await self.send_command(
+            TOPIC_CMD_START_CLEAN,
+            payload=payload,
+            timeout=10.0,
+        )
+
     async def start_easy_clean(self) -> CommandResponse:
         """Start quick/easy clean."""
         return await self.send_command(TOPIC_CMD_EASY_CLEAN)
