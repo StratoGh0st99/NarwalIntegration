@@ -293,16 +293,29 @@ class NarwalMapCamera(NarwalEntity, Camera):
                         cm_pp = static_map.resolution / 10
                         dock_ref_grid_x = (display.dock_ref_x * 10) / cm_pp - static_map.origin_x
                         dock_ref_grid_y = (display.dock_ref_y * 10) / cm_pp - static_map.origin_y
+                    # Room lookup at robot grid position
+                    from .narwal_client.map_renderer import lookup_room_at_grid
+                    robot_rid, robot_room = lookup_room_at_grid(
+                        static_map.compressed_map, static_map.width, static_map.height,
+                        int(robot_x), int(robot_y),
+                    )
+                    dock_rid, dock_room = (-1, "n/a")
+                    if static_map.dock_x is not None and static_map.dock_y is not None:
+                        dock_rid, dock_room = lookup_room_at_grid(
+                            static_map.compressed_map, static_map.width, static_map.height,
+                            int(static_map.dock_x), int(static_map.dock_y),
+                        )
                     _LOGGER.info(
-                        "POSITION DIAG: robot_raw=(%.2f, %.2f) robot_grid=(%.1f, %.1f) "
+                        "POSITION DIAG: robot_raw=(%.2f, %.2f) robot_grid=(%.1f, %.1f) robot_room=%s(id=%d) "
                         "| dock_ref_raw=(%.2f, %.2f) dock_ref_grid=(%.1f, %.1f) "
-                        "| static_dock_grid=(%.1f, %.1f) "
+                        "| static_dock_grid=(%.1f, %.1f) dock_room=%s(id=%d) "
                         "| res=%d origin=(%d, %d) map=%dx%d",
                         display.robot_x, display.robot_y,
-                        robot_x, robot_y,
+                        robot_x, robot_y, robot_room, robot_rid,
                         display.dock_ref_x, display.dock_ref_y,
                         dock_ref_grid_x or 0, dock_ref_grid_y or 0,
                         static_map.dock_x or 0, static_map.dock_y or 0,
+                        dock_room, dock_rid,
                         static_map.resolution,
                         static_map.origin_x, static_map.origin_y,
                         static_map.width, static_map.height,

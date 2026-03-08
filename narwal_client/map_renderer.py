@@ -133,6 +133,44 @@ def _decode_packed_varints(data: bytes) -> list[int]:
     return pixels
 
 
+def lookup_room_at_grid(
+    compressed: bytes,
+    width: int,
+    height: int,
+    grid_x: float,
+    grid_y: float,
+) -> tuple[int, str]:
+    """Look up the room_id at a grid pixel coordinate.
+
+    Returns (room_id, description) where description is one of:
+      "room_N" for a valid room, "(empty)" for val=0,
+      "(unassigned)" for 0x20/0x28, "(out_of_bounds)" if off grid.
+    """
+    px = int(grid_x)
+    py = int(grid_y)
+    if px < 0 or px >= width or py < 0 or py >= height:
+        return (-1, f"(out_of_bounds: {px},{py} vs {width}x{height})")
+
+    decompressed = decompress_map(compressed)
+    if not decompressed:
+        return (-1, "(no_data)")
+    pixels = _decode_packed_varints(decompressed)
+
+    idx = py * width + px
+    if idx >= len(pixels):
+        return (-1, f"(idx_overflow: {idx} >= {len(pixels)})")
+
+    val = pixels[idx]
+    if val == 0:
+        return (0, "(empty)")
+    if val in (0x20, 0x28):
+        return (0, "(unassigned)")
+    room_id = val >> 8
+    ptype = val & 0xFF
+    wall = " wall" if ptype & 0x10 else ""
+    return (room_id, f"room_{room_id}{wall}")
+
+
 def _darken(color: tuple[int, int, int], amount: int = 80) -> tuple[int, int, int]:
     """Darken an RGB color by subtracting from each channel."""
     return (
