@@ -152,19 +152,20 @@ class MapData:
         resolution = int(payload.get("3", 0))
 
         # Extract origin offsets from field 6 (coordinate transform).
-        # These convert world coordinates (cm) to grid pixel coordinates:
-        #   pixel_x = x_cm / cm_per_pixel - origin_x
-        #   pixel_y = y_cm / cm_per_pixel - origin_y
+        # Field 6: {1: origin_x, 2: ?, 3: origin_y, 4: resolution}
+        # These convert world coordinates (dm) to grid pixel coordinates:
+        #   pixel_x = (x_dm * 10) / cm_per_pixel - origin_x
+        #   pixel_y = (y_dm * 10) / cm_per_pixel - origin_y
         origin_x = 0
         origin_y = 0
         field6 = payload.get("6")
         if isinstance(field6, dict):
             try:
-                origin_x = int(field6.get("3", 0))
+                origin_x = int(field6.get("1", 0))
             except (ValueError, TypeError):
                 pass
             try:
-                origin_y = int(field6.get("1", 0))
+                origin_y = int(field6.get("3", 0))
             except (ValueError, TypeError):
                 pass
 
