@@ -2,7 +2,7 @@
 
 A fully **local, cloud-independent** [Home Assistant](https://www.home-assistant.io/) custom integration for Narwal robot vacuums. Communicates directly with your vacuum over your local network via WebSocket — no cloud account or internet connection required.
 
-> **Status: v0.5.0 — Stable Release** — Vacuum control, sensors, and live map with room labels are working for the Narwal Flow (AX12) and Freo Z10 Ultra (CX4). Available via HACS.
+> **Status: v0.6.0 — Room-Specific Cleaning** — Vacuum control, sensors, live map with room labels, and room-specific cleaning are working for the Narwal Flow (AX12) and Freo Z10 Ultra (CX4). Available via HACS.
 
 ## Device Compatibility
 
@@ -31,14 +31,23 @@ nmap -p 9002 <your-vacuum-ip>
 
 If port 9002 is open, please [open an issue](https://github.com/sjmotew/NarwalIntegration/issues/new/choose) with your model name and nmap results — we'd love to test it.
 
-## What's New in v0.5.0
+## What's New in v0.6.0
+
+- **Room-specific cleaning** — Select individual rooms to clean from the Home Assistant UI using the HA 2026.3 `vacuum.clean_area` service. Map your vacuum's rooms to HA areas in the entity settings, then clean specific rooms from the dashboard or automations.
+- **HA 2026.3 Segment API** — Full implementation of `async_get_segments()` and `async_clean_segments()`. Room names match the Narwal app exactly.
+- **Physically validated** — Room-specific cleaning tested on hardware: robot cleans only selected rooms and returns to dock.
+- **121 tests passing** — up from 54 in v0.5.0.
+
+### Previous releases
+
+<details>
+<summary>v0.5.0</summary>
 
 - **Live map with room labels** — Floor plan renders all rooms with correct labels (22 rooms decoded from robot's local data, no cloud needed). Room names from the Narwal app are preserved; unnamed rooms get automatic labels from the room type (e.g., "Bathroom 2").
 - **Validated position overlay** — Robot trail and dock position now render at the correct physical locations on the map. Coordinate transform validated against real cleaning runs.
 - **State mapping fix** — HA now correctly shows "Cleaning" vs "Returning" during active cleaning sessions (previously could show "Returning" incorrectly).
-- **All tests passing** — 54 tests, hassfest and HACS validation green.
 
-### Previous releases
+</details>
 
 <details>
 <summary>v0.4.0</summary>
@@ -56,6 +65,7 @@ If port 9002 is open, please [open an issue](https://github.com/sjmotew/NarwalIn
 
 ### Vacuum Control
 - **Start / Stop / Pause / Resume** cleaning — all commands validated
+- **Room-specific cleaning** — select individual rooms from the HA UI (requires HA 2026.3+)
 - **Return to dock** — robot stops cleaning and navigates home
 - **Locate** — robot announces "Robot is here"
 - **Fan speed control** — Quiet, Normal, Strong, Max (set-only; robot does not broadcast current level)
@@ -145,14 +155,15 @@ A keepalive heartbeat runs every 15 seconds to help prevent the robot from going
 - **Single connection** — The vacuum only handles one WebSocket connection reliably. Close the Narwal app before using the HA integration to avoid interference.
 - **Map may be stale** — The robot can return an old map from a previous layout. Running a new clean cycle typically refreshes it.
 - **Fan speed** — You can set fan speed, but the robot does not broadcast its current level. Changes made via the Narwal app won't be reflected.
-- **Start sends default clean settings** — Start always uses max suction, wet mop, single pass. Custom clean settings are not yet configurable from HA.
+- **Default clean settings only** — Start and room-specific clean always use max suction, wet mop, single pass. Custom clean settings are not yet configurable from HA.
+- **Room-specific cleaning requires HA 2026.3+** — The segment mapping UI is only available on Home Assistant 2026.3 or later.
 - **Local network only** — Your HA instance must be on the same network as the vacuum.
 
 ### Not Yet Implemented
-- **Room-specific cleaning** — HA 2026.3 adds `vacuum.clean_area` support; protocol research is done but implementation is deferred.
 - **Obstacle detection** — Furniture/object positions are stored in Narwal's cloud, not on the robot. Local obstacle mapping is under investigation.
 - **Camera / video streaming** — The robot has a camera with PIN authentication in the app. Reverse engineering the local camera feed is a future research goal.
 - **Cleaning history / statistics** — Not implemented.
+- **Custom clean settings per room** — Room cleaning currently uses default settings (max suction, wet mop, single pass). Per-room customization is a future enhancement.
 
 ## Troubleshooting
 
