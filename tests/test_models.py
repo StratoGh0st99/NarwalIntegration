@@ -388,7 +388,7 @@ class TestMapData:
         obs = m.obstacles[0]
         assert obs.id == 1
         assert obs.type_id == 14
-        assert obs.display_name == "Door"
+        assert obs.display_name == "Sofa"
         assert abs(obs.center_x - (-110.5)) < 0.5
         assert abs(obs.center_y - (-129.5)) < 0.5
         assert abs(obs.width - 11.0) < 0.5
@@ -405,9 +405,9 @@ class TestObstacleInfo:
     """Tests for ObstacleInfo dataclass."""
 
     def test_display_name_known_type(self) -> None:
-        """ObstacleInfo with type_id=14 has display_name 'Door'."""
+        """ObstacleInfo with type_id=14 has display_name 'Sofa'."""
         obs = ObstacleInfo(id=1, type_id=14)
-        assert obs.display_name == "Door"
+        assert obs.display_name == "Sofa"
 
     def test_display_name_unknown_type(self) -> None:
         """ObstacleInfo with unknown type_id=99 has display_name 'Object 99'."""
@@ -416,7 +416,7 @@ class TestObstacleInfo:
 
     def test_display_name_all_known_types(self) -> None:
         """All known type IDs have correct display names."""
-        expected = {2: "Furniture", 4: "Toilet", 6: "Sink", 14: "Door", 28: "Obstacle"}
+        expected = {2: "Double Bed", 4: "Dining Table", 6: "Tea Table", 14: "Sofa", 28: "Toilet"}
         for type_id, name in expected.items():
             obs = ObstacleInfo(id=1, type_id=type_id)
             assert obs.display_name == name
@@ -454,11 +454,11 @@ class TestParseObstacles:
         assert len(obstacles) == 2
         assert obstacles[0].id == 1
         assert obstacles[0].type_id == 14
-        assert obstacles[0].display_name == "Door"
+        assert obstacles[0].display_name == "Sofa"
         assert abs(obstacles[0].center_x - (-110.5)) < 0.5
         assert obstacles[1].id == 4
         assert obstacles[1].type_id == 2
-        assert obstacles[1].display_name == "Furniture"
+        assert obstacles[1].display_name == "Double Bed"
 
     def test_parse_obstacles_empty_field32(self) -> None:
         """_parse_obstacles handles missing/empty field 32 gracefully."""
@@ -479,7 +479,7 @@ class TestParseObstacles:
         assert len(obstacles) == 1
         assert obstacles[0].id == 13
         assert obstacles[0].type_id == 4
-        assert obstacles[0].display_name == "Toilet"
+        assert obstacles[0].display_name == "Dining Table"
 
     def test_parse_obstacles_float32_conversion(self) -> None:
         """float32 conversion works for coordinate values (uint32 bit patterns)."""

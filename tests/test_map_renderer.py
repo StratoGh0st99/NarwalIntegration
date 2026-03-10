@@ -232,20 +232,20 @@ class TestObstacleRendering:
         assert result.size == (width, height)
 
     def test_obstacle_type_colors_exist(self) -> None:
-        """OBSTACLE_COLORS dict has entries for all 5 known types."""
-        assert 2 in OBSTACLE_COLORS   # furniture
-        assert 4 in OBSTACLE_COLORS   # toilet
-        assert 6 in OBSTACLE_COLORS   # sink
-        assert 14 in OBSTACLE_COLORS  # door
-        assert 28 in OBSTACLE_COLORS  # obstacle
+        """OBSTACLE_COLORS dict has entries for all furniture enum types."""
+        assert 2 in OBSTACLE_COLORS   # double bed
+        assert 4 in OBSTACLE_COLORS   # dining table
+        assert 14 in OBSTACLE_COLORS  # sofa
+        assert 28 in OBSTACLE_COLORS  # toilet
+        assert 33 in OBSTACLE_COLORS  # washbasin
         assert isinstance(OBSTACLE_COLOR_DEFAULT, tuple)
         assert len(OBSTACLE_COLOR_DEFAULT) == 3
 
     def test_obstacle_colors_are_distinct(self) -> None:
-        """Each obstacle type has a distinct color (furniture != door != obstacle)."""
-        assert OBSTACLE_COLORS[2] != OBSTACLE_COLORS[14]   # furniture != door
-        assert OBSTACLE_COLORS[14] != OBSTACLE_COLORS[28]  # door != obstacle
-        assert OBSTACLE_COLORS[28] != OBSTACLE_COLORS[2]   # obstacle != furniture
+        """Different obstacle categories have distinct colors."""
+        assert OBSTACLE_COLORS[2] != OBSTACLE_COLORS[14]   # bed != sofa
+        assert OBSTACLE_COLORS[14] != OBSTACLE_COLORS[28]  # sofa != toilet
+        assert OBSTACLE_COLORS[28] != OBSTACLE_COLORS[2]   # toilet != bed
 
     def test_empty_obstacles_same_as_no_obstacles(self) -> None:
         """render_base_map with empty obstacles list produces same output as without."""

@@ -84,11 +84,11 @@ class ObstacleInfo:
     """An obstacle/furniture annotation on the map.
 
     Parsed from get_map field 2.32 (MapFurnitureInfoList).
-    The typeId is a CATEGORY code, not the specific furniture enum.
+    The typeId maps to the furniture enum from APK map_furniture.json.
 
     bbp field mapping (confirmed from probe data + APK schema):
       bbp field 1 -> id (int32)
-      bbp field 2 -> typeId (uint32, category code)
+      bbp field 2 -> typeId (uint32, furniture enum)
       bbp field 3.1.1 -> centerX (float32)
       bbp field 3.1.2 -> centerY (float32)
       bbp field 3.2 -> width (float32)
@@ -97,19 +97,54 @@ class ObstacleInfo:
     """
 
     id: int = 0
-    type_id: int = 0       # Category: 2=furniture, 4=toilet, 6=sink, 14=door, 28=obstacle
+    type_id: int = 0       # Furniture enum from APK map_furniture.json
     center_x: float = 0.0  # World X coordinate
     center_y: float = 0.0  # World Y coordinate
     width: float = 0.0     # Object width in grid units
     height: float = 0.0    # Object height in grid units
     angle: float = 0.0     # Rotation in degrees
 
+    # Full furniture type enum from APK map_furniture.json
     TYPE_NAMES: ClassVar[dict[int, str]] = {
-        2: "Furniture",
-        4: "Toilet",
-        6: "Sink",
-        14: "Door",
-        28: "Obstacle",
+        0: "Placeholder",
+        1: "Single Bed",
+        2: "Double Bed",
+        3: "Baby Bed",
+        4: "Dining Table",
+        5: "Round Table",
+        6: "Tea Table",
+        7: "Round Tea Table",
+        8: "TV Stand",
+        9: "Bedside Table",
+        10: "Locker",
+        11: "Wardrobe",
+        12: "Shoe Cabinet",
+        13: "Armchair",
+        14: "Sofa",
+        15: "L-Shaped Sofa",
+        16: "Lazy Chair",
+        17: "Chair",
+        18: "Bar Chair",
+        19: "Cat Toilet",
+        20: "Pet Feeder",
+        21: "Pet House",
+        22: "Washing Machine",
+        23: "Refrigerator",
+        24: "Air Conditioner",
+        25: "Fan",
+        26: "Potted Plant",
+        27: "Floor Mirror",
+        28: "Toilet",
+        29: "Piano",
+        30: "U-Shaped Sofa",
+        31: "Desk",
+        32: "Grand Piano",
+        33: "Washbasin",
+        34: "Stove",
+        75: "Cat House",
+        76: "Dog House",
+        77: "Round Placeholder",
+        78: "Weighing Scale",
     }
 
     @property

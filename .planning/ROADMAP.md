@@ -42,13 +42,18 @@ Plans:
 
 ### 📋 Phase 10: Obstacle Mapping
 
-**Goal**: Display furniture and obstacle positions as overlays on the floor map
+**Goal**: Display furniture and obstacle positions as colored rectangles with type labels on the floor map, parsed from local get_map field 2.32 data
 **Depends on**: Phase 7 (complete)
 **Success Criteria**:
   1. Detected obstacles render on the map at their physical locations
   2. Obstacle types are labeled (furniture, cable, shoe, etc.)
-**Context**: get_vision_image returns empty (cloud-only). Need deeper RE.
-**Plans**: TBD
+**Requirements:** [OBS-01, OBS-02]
+**Plans:** 1 plan
+
+Plans:
+- [x] 10-01-PLAN.md — ObstacleInfo model + map rendering + tests + sync
+
+**Research**: See 10-RESEARCH.md — obstacle data is LOCAL in field 2.32 (not cloud-only as previously assumed)
 
 ### 📋 Phase 11: Camera RE
 
@@ -68,5 +73,4 @@ Plans:
 |-------|--------|-----------|
 | 0-8 (v0.5) | Complete | 2026-03-08 |
 | 9. Room-Specific Cleaning | Complete | 2026-03-08 |
-| 10. Obstacle Mapping | Not started (research needed) | - |
-| 11. Camera RE | Not started (research needed) | - |
+| 10. Obstacle Mapping | Complete | Complete    | 2026-03-09 | 11. Camera RE | Not started (research needed) | - |

@@ -46,13 +46,54 @@ ROOM_COLORS: list[tuple[int, int, int]] = [
     (174, 198, 207),  # 22 - pastel blue
 ]
 
-# Obstacle/furniture annotation colors by type category
+# Obstacle/furniture annotation colors by catalog from APK map_furniture.json
 OBSTACLE_COLORS: dict[int, tuple[int, int, int]] = {
-    2: (180, 140, 100),    # furniture - tan
-    4: (120, 180, 220),    # toilet - light blue
-    6: (120, 180, 220),    # sink - light blue
-    14: (220, 220, 220),   # door - light gray
-    28: (255, 100, 80),    # obstacle - red/orange
+    # Beds (1-3)
+    1: (180, 140, 100),    # single bed - tan
+    2: (180, 140, 100),    # double bed - tan
+    3: (180, 140, 100),    # baby bed - tan
+    # Tables (4-7, 31)
+    4: (160, 130, 90),     # dining table - brown
+    5: (160, 130, 90),     # round table - brown
+    6: (160, 130, 90),     # tea table - brown
+    7: (160, 130, 90),     # round tea table - brown
+    31: (160, 130, 90),    # desk - brown
+    # Cupboards/storage (8-12)
+    8: (140, 120, 100),    # TV stand - dark tan
+    9: (140, 120, 100),    # bedside table - dark tan
+    10: (140, 120, 100),   # locker - dark tan
+    11: (140, 120, 100),   # wardrobe - dark tan
+    12: (140, 120, 100),   # shoe cabinet - dark tan
+    # Sofas/chairs (13-18, 30)
+    13: (100, 160, 130),   # armchair - sage
+    14: (100, 160, 130),   # sofa - sage
+    15: (100, 160, 130),   # L-shaped sofa - sage
+    16: (100, 160, 130),   # lazy chair - sage
+    17: (100, 160, 130),   # chair - sage
+    18: (100, 160, 130),   # bar chair - sage
+    30: (100, 160, 130),   # U-shaped sofa - sage
+    # Pets (19-21, 75-76)
+    19: (200, 160, 120),   # cat toilet - peach
+    20: (200, 160, 120),   # pet feeder - peach
+    21: (200, 160, 120),   # pet house - peach
+    75: (200, 160, 120),   # cat house - peach
+    76: (200, 160, 120),   # dog house - peach
+    # Appliances (22-25, 34)
+    22: (150, 180, 200),   # washing machine - steel blue
+    23: (150, 180, 200),   # refrigerator - steel blue
+    24: (150, 180, 200),   # air conditioner - steel blue
+    25: (150, 180, 200),   # fan - steel blue
+    34: (150, 180, 200),   # stove - steel blue
+    # Bathroom (28, 33)
+    28: (120, 180, 220),   # toilet - light blue
+    33: (120, 180, 220),   # washbasin - light blue
+    # Misc (26-27, 29, 32, 77-78)
+    26: (100, 180, 100),   # potted plant - green
+    27: (200, 200, 220),   # floor mirror - silver
+    29: (80, 80, 80),      # piano - dark gray
+    32: (80, 80, 80),      # grand piano - dark gray
+    77: (200, 200, 200),   # round placeholder - gray
+    78: (200, 200, 200),   # weighing scale - gray
 }
 OBSTACLE_COLOR_DEFAULT = (200, 200, 200)
 

@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-08T23:52:33.400Z"
+last_updated: "2026-03-09T23:33:15.639Z"
 progress:
-  total_phases: 3
-  completed_phases: 2
-  total_plans: 7
-  completed_plans: 6
+  total_phases: 4
+  completed_phases: 3
+  total_plans: 8
+  completed_plans: 7
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-01)
 
 **Core value:** Users can control and monitor their Narwal Flow vacuum entirely locally — start/stop/pause, see status, view a live floor map — without any cloud dependency.
-**Current focus:** Phase 9 COMPLETE — Room-Specific Cleaning
+**Current focus:** Phase 10 IN PROGRESS — Obstacle Mapping
 
 ## Current Position
 
-Phase: 9 of 11 — COMPLETE (Room-Specific Cleaning)
-Current Plan: 2 of 2 (all complete)
-Status: Phase 9 complete — Segment API, tests, and physical robot validation all done
-Last activity: 2026-03-08 — Room-specific cleaning validated on physical robot
+Phase: 10 of 11 — IN PROGRESS (Obstacle Mapping)
+Current Plan: 1 of 1 (complete)
+Status: Plan 10-01 complete — obstacle parsing and rendering implemented
+Last activity: 2026-03-09 — Obstacle mapping plan 01 executed
 
-Progress: [█████████░] 82% (phases 0-9 complete)
+Progress: [█████████░] 86% (phases 0-10 in progress)
 
 ## Accumulated Context
 
@@ -62,11 +62,19 @@ Progress: [█████████░] 82% (phases 0-9 complete)
 - CleanTask payload hardcodes max suction / wet mop / single pass
 - Validate: does start work WITHOUT CleanTask payload?
 
+### Key Decisions (Phase 10)
+
+- Obstacle positions are LOCAL (field 2.32), not cloud-only — corrects Phase 7 assumption
+- typeId is a CATEGORY code (2=furniture, 14=door, 28=obstacle), not specific furniture enum
+- Pass obstacles + origin to render_base_map (not pre-computed grid coords)
+- Obstacles render on base map (static, cached) not overlay
+- Skip rotation for v1 — axis-aligned rectangles sufficient
+
 ### Blockers/Concerns
 
-None — Phase 9 complete
+None — Phase 10 plan 01 complete
 
 ## Session Continuity
 
-Last session: 2026-03-08
-Stopped at: Completed 09-02-PLAN.md (tests + physical robot validation). Phase 9 complete.
+Last session: 2026-03-09
+Stopped at: Completed 10-01-PLAN.md (obstacle parsing + rendering). Phase 10 plan 01 complete.
