@@ -160,8 +160,8 @@ A keepalive heartbeat runs every 15 seconds to help prevent the robot from going
 - **Local network only** — Your HA instance must be on the same network as the vacuum.
 
 ### Not Yet Implemented
-- **Obstacle detection** — Furniture/object positions are stored in Narwal's cloud, not on the robot. Local obstacle mapping is under investigation.
-- **Camera / video streaming** — The robot has a camera with PIN authentication in the app. Reverse engineering the local camera feed is a future research goal.
+- **Vision obstacle detection** — The robot's camera detects transient obstacles (pet waste, cables, shoes, etc.) during cleaning. Obstacle positions may be available locally via `get_vision_image` during active cleaning runs; needs probing during a clean cycle.
+- **Camera / video streaming** — The robot has a camera; the live video feed requires PIN authentication in the app. Reverse engineering the local camera feed is a future research goal.
 - **Cleaning history / statistics** — Not implemented.
 - **Custom clean settings per room** — Room cleaning currently uses default settings (max suction, wet mop, single pass). Per-room customization is a future enhancement.
 
