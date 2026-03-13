@@ -5,7 +5,7 @@ milestone_name: milestone
 status: unknown
 last_updated: "2026-03-09T23:33:15.639Z"
 progress:
-  total_phases: 4
+  total_phases: 5
   completed_phases: 3
   total_plans: 8
   completed_plans: 7
@@ -18,16 +18,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-01)
 
 **Core value:** Users can control and monitor their Narwal Flow vacuum entirely locally — start/stop/pause, see status, view a live floor map — without any cloud dependency.
-**Current focus:** Phase 10 IN PROGRESS — Obstacle Mapping
+**Current focus:** Phase 10 COMPLETE — Next: Phase 11 (Vision Obstacles) or Phase 12 (Camera & Patrol)
 
 ## Current Position
 
-Phase: 10 of 11 — IN PROGRESS (Obstacle Mapping)
-Current Plan: 1 of 1 (complete)
-Status: Plan 10-01 complete — obstacle parsing and rendering implemented
-Last activity: 2026-03-09 — Obstacle mapping plan 01 executed
+Phase: 10 of 12 — COMPLETE (Obstacle Mapping)
+Next phase: 11 (Vision Obstacles — needs probing during clean) or 12 (Camera & Patrol)
+Last activity: 2026-03-09 — Obstacle type names corrected to APK furniture enum
 
-Progress: [█████████░] 86% (phases 0-10 in progress)
+Progress: [██████░░░░] 60% (3/5 post-v0.5 phases complete)
 
 ## Accumulated Context
 
@@ -44,7 +43,7 @@ Progress: [█████████░] 86% (phases 0-10 in progress)
 - Coordinate transform: factor 1.0, pixel = raw - origin (no scaling)
 - is_returning requires BOTH field 3.7 AND 3.10 (prevents false positives)
 - Room data is 100% local — ROOM_TYPE enum + instance_index for names
-- Obstacles are cloud-only (get_vision_image returns empty)
+- Furniture obstacles are LOCAL (field 2.32, typeId = APK furniture enum). Vision obstacles likely also local — needs probing during active clean.
 - Trail segment breaks are obstacle avoidance, not a rendering bug (deferred)
 - Label overlap matches Narwal app behavior (not an issue to fix)
 
@@ -65,16 +64,17 @@ Progress: [█████████░] 86% (phases 0-10 in progress)
 ### Key Decisions (Phase 10)
 
 - Obstacle positions are LOCAL (field 2.32), not cloud-only — corrects Phase 7 assumption
-- typeId is a CATEGORY code (2=furniture, 14=door, 28=obstacle), not specific furniture enum
+- typeId IS the specific furniture enum from APK map_furniture.json (NOT category codes — corrected after user validation)
 - Pass obstacles + origin to render_base_map (not pre-computed grid coords)
 - Obstacles render on base map (static, cached) not overlay
 - Skip rotation for v1 — axis-aligned rectangles sufficient
 
 ### Blockers/Concerns
 
-None — Phase 10 plan 01 complete
+None
 
 ## Session Continuity
 
-Last session: 2026-03-09
-Stopped at: Completed 10-01-PLAN.md (obstacle parsing + rendering). Phase 10 plan 01 complete.
+Last session: 2026-03-11
+Stopped at: Phase 11 plan 11-01 task 2 — vision obstacle data source investigation. get_vision_image returns NOT_APPLICABLE. App shows obstacles but we can't find the WebSocket source. Deep APK reverse-engineering done (3d-map.js, MapVisionInfo schema, StaticMapPayload). See .continue-here.md for full context.
+Resume file: .planning/phases/11-vision-obstacles/.continue-here.md

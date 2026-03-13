@@ -7,11 +7,15 @@ import logging
 from typing import Any
 
 from homeassistant.components.vacuum import (
-    Segment,
     StateVacuumEntity,
     VacuumActivity,
     VacuumEntityFeature,
 )
+
+try:
+    from homeassistant.components.vacuum import Segment
+except ImportError:
+    Segment = None  # HA < 2026.3 — room cleaning unavailable
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -56,8 +60,7 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         | VacuumEntityFeature.RETURN_HOME
         | VacuumEntityFeature.FAN_SPEED
         | VacuumEntityFeature.LOCATE
-        | VacuumEntityFeature.CLEAN_AREA
-    )
+    ) | (VacuumEntityFeature.CLEAN_AREA if Segment is not None else VacuumEntityFeature(0))
     _attr_fan_speed_list = FAN_SPEED_LIST
 
     def __init__(self, coordinator: NarwalCoordinator) -> None:
@@ -179,13 +182,16 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
 
     # --- Segment API (HA 2026.3 room-specific cleaning) ---
 
-    async def async_get_segments(self) -> list[Segment]:
+    async def async_get_segments(self) -> list:
         """Return cleanable room segments from map data.
 
         Maps RoomInfo from get_map to HA Segment objects.
         Room names match the Narwal app exactly (RoomInfo.display_name).
-        Returns [] when map data is not yet loaded (robot asleep at startup).
+        Returns [] when map data is not yet loaded (robot asleep at startup)
+        or when HA < 2026.3 (Segment class unavailable).
         """
+        if Segment is None:
+            return []
         state = self.coordinator.data
         if state is None or state.map_data is None:
             return []
