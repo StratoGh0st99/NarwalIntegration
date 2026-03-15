@@ -257,7 +257,7 @@ class VisionObstacleInfo:
         """Return display name: type_name from robot, then enum lookup, then fallback."""
         if self.type_name:
             return self.type_name
-        return self.TYPE_NAMES.get(self.label, f"Obstacle {self.label}")
+        return self.TYPE_NAMES.get(self.label, "Unknown")
 
     @property
     def category(self) -> str:

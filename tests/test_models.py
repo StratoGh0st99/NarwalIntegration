@@ -531,9 +531,9 @@ class TestVisionObstacleInfo:
         assert obs.display_name == "Shoes"
 
     def test_display_name_unknown_label(self) -> None:
-        """VisionObstacleInfo with unknown label=99 falls back to 'Obstacle 99'."""
+        """VisionObstacleInfo with unknown label=99 falls back to 'Unknown'."""
         obs = VisionObstacleInfo(id=2, label=99)
-        assert obs.display_name == "Obstacle 99"
+        assert obs.display_name == "Unknown"
 
     def test_display_name_pet_waste(self) -> None:
         """label=3 is 'Pet Waste' (hazard category)."""
