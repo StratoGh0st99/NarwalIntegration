@@ -275,15 +275,33 @@ class VisionObstacleInfo:
         return (self.center_x - origin_x, self.center_y - origin_y)
 
 
-def _parse_vision_obstacles(decoded: dict) -> list["VisionObstacleInfo"]:
-    """Parse vision obstacle detections from display_map broadcast field 9.
+def _decode_float32_array(hex_data: dict) -> list[float]:
+    """Decode a hex-encoded float32 array from bbp output.
 
-    Field 9 schema (from probe data 2026-03-15):
-      field 1: type_id (int32, 0=unknown — omitted by bbp when 0)
-      field 2: detection_sequence (incrementing counter, used as ID for dedup)
-      field 3: unknown (1 or 2)
-      field 4: constant (1)
-      field 5: constant (2)
+    bbp returns bytes fields as {"_hex": "...", "_len": N}.
+    Each 4 bytes is one little-endian float32.
+    """
+    hex_str = hex_data.get("_hex", "")
+    if not hex_str:
+        return []
+    try:
+        raw = bytes.fromhex(hex_str)
+        count = len(raw) // 4
+        return list(struct.unpack(f"<{count}f", raw[:count * 4]))
+    except (ValueError, struct.error):
+        return []
+
+
+def _parse_vision_obstacles(decoded: dict) -> list["VisionObstacleInfo"]:
+    """Parse vision obstacle detections from display_map field 9 + field 12.
+
+    Field 9: current detections (type_id + detection_seq, no coordinates).
+    Field 12: trail segments with coordinates + detection history.
+      field12[i].1.1: hex float32[] x-coordinates
+      field12[i].1.2: hex float32[] y-coordinates
+      field12[i].2: detection list (same schema as field 9 items)
+
+    Coordinates from field 12 are used to position the detections from field 9.
 
     Args:
         decoded: The bbp-decoded dict from a display_map broadcast.
@@ -292,8 +310,54 @@ def _parse_vision_obstacles(decoded: dict) -> list["VisionObstacleInfo"]:
         List of VisionObstacleInfo objects. Deduplicates by detection_seq.
         Returns empty list for missing/malformed data.
     """
+    # First, build a coordinate map from field 12 (detection_seq -> (x, y))
+    coord_map: dict[int, tuple[float, float]] = {}
+    field12 = decoded.get("12")
+    if field12:
+        if isinstance(field12, dict):
+            field12 = [field12]
+        if isinstance(field12, list):
+            for segment in field12:
+                if not isinstance(segment, dict):
+                    continue
+                try:
+                    coords_container = segment.get("1", {})
+                    if not isinstance(coords_container, dict):
+                        continue
+                    x_data = coords_container.get("1")
+                    y_data = coords_container.get("2")
+                    if not isinstance(x_data, dict) or not isinstance(y_data, dict):
+                        continue
+                    x_coords = _decode_float32_array(x_data)
+                    y_coords = _decode_float32_array(y_data)
+                    if not x_coords or not y_coords:
+                        continue
+                    # Use last coordinate in segment as detection position
+                    last_x = x_coords[-1]
+                    last_y = y_coords[-1]
+
+                    detections = segment.get("2")
+                    if detections:
+                        if isinstance(detections, dict):
+                            detections = [detections]
+                        if isinstance(detections, list):
+                            for det in detections:
+                                if isinstance(det, dict):
+                                    seq = int(det.get("2", 0))
+                                    coord_map[seq] = (last_x, last_y)
+                except (ValueError, TypeError, AttributeError):
+                    continue
+
+    # Now parse field 9 for current detections, enriched with field 12 coords
     field9 = decoded.get("9")
     if not field9:
+        # Even without field 9, field 12 detections have coordinates
+        if coord_map:
+            field12_list = decoded.get("12")
+            if isinstance(field12_list, dict):
+                field12_list = [field12_list]
+            if isinstance(field12_list, list):
+                return _obstacles_from_field12(field12_list, coord_map)
         return []
 
     if isinstance(field9, dict):
@@ -312,12 +376,52 @@ def _parse_vision_obstacles(decoded: dict) -> list["VisionObstacleInfo"]:
                 continue
             seen_ids.add(detection_seq)
             type_id = int(item.get("1", 0))
+            cx, cy = coord_map.get(detection_seq, (0.0, 0.0))
             obstacles.append(VisionObstacleInfo(
                 id=detection_seq,
                 label=type_id,
+                center_x=cx,
+                center_y=cy,
             ))
         except (ValueError, TypeError, AttributeError):
             continue
+    return obstacles
+
+
+def _obstacles_from_field12(
+    segments: list, coord_map: dict[int, tuple[float, float]]
+) -> list["VisionObstacleInfo"]:
+    """Extract vision obstacles from field 12 when field 9 is absent."""
+    obstacles: list[VisionObstacleInfo] = []
+    seen_ids: set[int] = set()
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        detections = segment.get("2")
+        if not detections:
+            continue
+        if isinstance(detections, dict):
+            detections = [detections]
+        if not isinstance(detections, list):
+            continue
+        for det in detections:
+            if not isinstance(det, dict):
+                continue
+            try:
+                seq = int(det.get("2", 0))
+                if seq in seen_ids:
+                    continue
+                seen_ids.add(seq)
+                type_id = int(det.get("1", 0))
+                cx, cy = coord_map.get(seq, (0.0, 0.0))
+                obstacles.append(VisionObstacleInfo(
+                    id=seq,
+                    label=type_id,
+                    center_x=cx,
+                    center_y=cy,
+                ))
+            except (ValueError, TypeError, AttributeError):
+                continue
     return obstacles
 
 

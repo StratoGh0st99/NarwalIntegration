@@ -10,6 +10,7 @@ from narwal_client.models import (
     NarwalState,
     ObstacleInfo,
     VisionObstacleInfo,
+    _decode_float32_array,
     _parse_obstacles,
     _parse_vision_obstacles,
 )
@@ -692,6 +693,111 @@ class TestParseVisionObstacles:
         ]}
         obstacles = _parse_vision_obstacles(decoded)
         assert len(obstacles) == 2
+
+    def test_parse_field12_coordinates(self) -> None:
+        """Field 12 trail segments provide coordinates for field 9 detections."""
+        # Encode two float32 values: -10.5, 20.3
+        x_hex = struct.pack("<2f", -10.5, 20.3).hex()
+        y_hex = struct.pack("<2f", 5.0, -15.7).hex()
+        decoded = {
+            "9": [{"1": 1, "2": 42}],  # Cable, seq=42
+            "12": [{
+                "1": {
+                    "1": {"_hex": x_hex, "_len": 8},
+                    "2": {"_hex": y_hex, "_len": 8},
+                },
+                "2": [{"1": 1, "2": 42, "3": 1, "4": 1, "5": 2}],
+            }],
+        }
+        obstacles = _parse_vision_obstacles(decoded)
+        assert len(obstacles) == 1
+        # Last coordinate in segment: (20.3, -15.7)
+        assert abs(obstacles[0].center_x - 20.3) < 0.1
+        assert abs(obstacles[0].center_y - (-15.7)) < 0.1
+
+    def test_parse_field12_only_no_field9(self) -> None:
+        """When field 9 is absent, obstacles still extracted from field 12."""
+        x_hex = struct.pack("<1f", 7.5).hex()
+        y_hex = struct.pack("<1f", -3.2).hex()
+        decoded = {
+            "12": [{
+                "1": {
+                    "1": {"_hex": x_hex, "_len": 4},
+                    "2": {"_hex": y_hex, "_len": 4},
+                },
+                "2": {"1": 5, "2": 99},  # single detection as dict
+            }],
+        }
+        obstacles = _parse_vision_obstacles(decoded)
+        assert len(obstacles) == 1
+        assert obstacles[0].label == 5
+        assert obstacles[0].display_name == "Shoes"
+        assert abs(obstacles[0].center_x - 7.5) < 0.1
+        assert abs(obstacles[0].center_y - (-3.2)) < 0.1
+
+    def test_parse_field12_multiple_segments(self) -> None:
+        """Multiple field 12 segments each contribute detection coordinates."""
+        seg1_x = struct.pack("<1f", 1.0).hex()
+        seg1_y = struct.pack("<1f", 2.0).hex()
+        seg2_x = struct.pack("<1f", 10.0).hex()
+        seg2_y = struct.pack("<1f", 20.0).hex()
+        decoded = {
+            "9": [
+                {"1": 1, "2": 50},  # Cable at seg1
+                {"1": 3, "2": 51},  # Pet Waste at seg2
+            ],
+            "12": [
+                {
+                    "1": {"1": {"_hex": seg1_x, "_len": 4}, "2": {"_hex": seg1_y, "_len": 4}},
+                    "2": [{"1": 1, "2": 50}],
+                },
+                {
+                    "1": {"1": {"_hex": seg2_x, "_len": 4}, "2": {"_hex": seg2_y, "_len": 4}},
+                    "2": [{"1": 3, "2": 51}],
+                },
+            ],
+        }
+        obstacles = _parse_vision_obstacles(decoded)
+        assert len(obstacles) == 2
+        cable = next(o for o in obstacles if o.label == 1)
+        pet = next(o for o in obstacles if o.label == 3)
+        assert abs(cable.center_x - 1.0) < 0.01
+        assert abs(cable.center_y - 2.0) < 0.01
+        assert abs(pet.center_x - 10.0) < 0.01
+        assert abs(pet.center_y - 20.0) < 0.01
+
+    def test_parse_field12_no_coordinates_falls_back_zero(self) -> None:
+        """Detections without field 12 match get (0,0) coordinates."""
+        decoded = {
+            "9": [{"1": 2, "2": 77}],
+            # No field 12
+        }
+        obstacles = _parse_vision_obstacles(decoded)
+        assert len(obstacles) == 1
+        assert obstacles[0].center_x == 0.0
+        assert obstacles[0].center_y == 0.0
+
+
+class TestDecodeFloat32Array:
+    """Tests for _decode_float32_array helper."""
+
+    def test_decode_basic(self) -> None:
+        """Decodes hex-encoded float32 array."""
+        values = [1.5, -2.5, 3.0]
+        hex_str = struct.pack("<3f", *values).hex()
+        result = _decode_float32_array({"_hex": hex_str, "_len": 12})
+        assert len(result) == 3
+        for a, b in zip(result, values):
+            assert abs(a - b) < 0.001
+
+    def test_decode_empty(self) -> None:
+        """Returns empty list for empty hex."""
+        assert _decode_float32_array({"_hex": "", "_len": 0}) == []
+        assert _decode_float32_array({}) == []
+
+    def test_decode_invalid_hex(self) -> None:
+        """Returns empty list for invalid hex string."""
+        assert _decode_float32_array({"_hex": "zzzz"}) == []
 
 
 class TestNarwalStateVisionObstacles:
