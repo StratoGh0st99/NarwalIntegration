@@ -795,9 +795,27 @@ class TestDecodeFloat32Array:
         assert _decode_float32_array({"_hex": "", "_len": 0}) == []
         assert _decode_float32_array({}) == []
 
+    def test_decode_raw_bytes(self) -> None:
+        """Decodes raw bytes (common bbp output format)."""
+        values = [1.5, -2.5, 3.0]
+        raw = struct.pack("<3f", *values)
+        result = _decode_float32_array(raw)
+        assert len(result) == 3
+        for a, b in zip(result, values):
+            assert abs(a - b) < 0.001
+
+    def test_decode_empty_bytes(self) -> None:
+        """Returns empty list for empty bytes."""
+        assert _decode_float32_array(b"") == []
+
     def test_decode_invalid_hex(self) -> None:
         """Returns empty list for invalid hex string."""
         assert _decode_float32_array({"_hex": "zzzz"}) == []
+
+    def test_decode_non_dict_non_bytes(self) -> None:
+        """Returns empty list for unsupported types."""
+        assert _decode_float32_array(42) == []
+        assert _decode_float32_array("not bytes") == []
 
 
 class TestNarwalStateVisionObstacles:

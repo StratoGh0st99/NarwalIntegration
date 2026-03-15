@@ -275,17 +275,29 @@ class VisionObstacleInfo:
         return (self.center_x - origin_x, self.center_y - origin_y)
 
 
-def _decode_float32_array(hex_data: dict) -> list[float]:
-    """Decode a hex-encoded float32 array from bbp output.
+def _decode_float32_array(data: "dict | bytes") -> list[float]:
+    """Decode a float32 array from bbp output.
 
-    bbp returns bytes fields as {"_hex": "...", "_len": N}.
+    bbp may return bytes fields as either:
+    - raw ``bytes`` (common case), or
+    - ``{"_hex": "...", "_len": N}`` dict.
     Each 4 bytes is one little-endian float32.
     """
-    hex_str = hex_data.get("_hex", "")
-    if not hex_str:
+    if isinstance(data, bytes):
+        raw = data
+    elif isinstance(data, dict):
+        hex_str = data.get("_hex", "")
+        if not hex_str:
+            return []
+        try:
+            raw = bytes.fromhex(hex_str)
+        except ValueError:
+            return []
+    else:
+        return []
+    if not raw:
         return []
     try:
-        raw = bytes.fromhex(hex_str)
         count = len(raw) // 4
         return list(struct.unpack(f"<{count}f", raw[:count * 4]))
     except (ValueError, struct.error):
@@ -326,7 +338,7 @@ def _parse_vision_obstacles(decoded: dict) -> list["VisionObstacleInfo"]:
                         continue
                     x_data = coords_container.get("1")
                     y_data = coords_container.get("2")
-                    if not isinstance(x_data, dict) or not isinstance(y_data, dict):
+                    if not isinstance(x_data, (dict, bytes)) or not isinstance(y_data, (dict, bytes)):
                         continue
                     x_coords = _decode_float32_array(x_data)
                     y_coords = _decode_float32_array(y_data)
