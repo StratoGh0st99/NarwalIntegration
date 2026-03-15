@@ -5,7 +5,14 @@ from __future__ import annotations
 import struct
 
 from narwal_client.const import WorkingStatus
-from narwal_client.models import MapData, NarwalState, ObstacleInfo, _parse_obstacles
+from narwal_client.models import (
+    MapData,
+    NarwalState,
+    ObstacleInfo,
+    VisionObstacleInfo,
+    _parse_obstacles,
+    _parse_vision_obstacles,
+)
 
 
 class TestNarwalState:
@@ -512,3 +519,192 @@ class TestParseObstacles:
         obstacles = _parse_obstacles(field32)
         assert len(obstacles) == 1
         assert obstacles[0].type_id == 28
+
+
+class TestVisionObstacleInfo:
+    """Tests for VisionObstacleInfo dataclass."""
+
+    def test_display_name_known_label(self) -> None:
+        """VisionObstacleInfo with label=5 has display_name 'Shoes'."""
+        obs = VisionObstacleInfo(id=1, label=5, center_x=10.0, center_y=20.0)
+        assert obs.display_name == "Shoes"
+
+    def test_display_name_unknown_label(self) -> None:
+        """VisionObstacleInfo with unknown label=99 falls back to 'Obstacle 99'."""
+        obs = VisionObstacleInfo(id=2, label=99)
+        assert obs.display_name == "Obstacle 99"
+
+    def test_display_name_pet_waste(self) -> None:
+        """label=3 is 'Pet Waste' (hazard category)."""
+        obs = VisionObstacleInfo(id=1, label=3)
+        assert obs.display_name == "Pet Waste"
+
+    def test_display_name_cat(self) -> None:
+        """label=41 is 'Cat' (pet category)."""
+        obs = VisionObstacleInfo(id=1, label=41)
+        assert obs.display_name == "Cat"
+
+    def test_display_name_type_name_override(self) -> None:
+        """type_name from robot overrides TYPE_NAMES lookup."""
+        obs = VisionObstacleInfo(id=1, label=5, type_name="Custom Name")
+        assert obs.display_name == "Custom Name"
+
+    def test_type_names_coverage_all_42(self) -> None:
+        """TYPE_NAMES has entries for all 42 valid vision obstacle types."""
+        # Type IDs from APK: 1-22, 25-32, 34-42 (IDs 23, 24, 33 missing from APK)
+        expected_ids = set(range(1, 23)) | set(range(25, 33)) | set(range(34, 43))
+        for type_id in expected_ids:
+            assert type_id in VisionObstacleInfo.TYPE_NAMES, (
+                f"Missing TYPE_NAMES entry for label {type_id}"
+            )
+
+    def test_category_hazard(self) -> None:
+        """label=3 (Pet Waste) is in hazard category."""
+        obs = VisionObstacleInfo(id=1, label=3)
+        assert obs.category == "hazard"
+
+    def test_category_hazard_liquid(self) -> None:
+        """label=4 (Liquid) is in hazard category."""
+        obs = VisionObstacleInfo(id=1, label=4)
+        assert obs.category == "hazard"
+
+    def test_category_hazard_cliff(self) -> None:
+        """label=16 (Drop-off) is in hazard category."""
+        obs = VisionObstacleInfo(id=1, label=16)
+        assert obs.category == "hazard"
+
+    def test_category_clothing_shoes(self) -> None:
+        """label=5 (Shoes) is in clothing category."""
+        obs = VisionObstacleInfo(id=1, label=5)
+        assert obs.category == "clothing"
+
+    def test_category_clothing_socks(self) -> None:
+        """label=7 (Fabric/Socks) is in clothing category."""
+        obs = VisionObstacleInfo(id=1, label=7)
+        assert obs.category == "clothing"
+
+    def test_category_pet(self) -> None:
+        """label=41 (Cat) is in pet category."""
+        obs = VisionObstacleInfo(id=1, label=41)
+        assert obs.category == "pet"
+
+    def test_category_pet_toy(self) -> None:
+        """label=37 (Pet Toy) is in pet category."""
+        obs = VisionObstacleInfo(id=1, label=37)
+        assert obs.category == "pet"
+
+    def test_category_misc_cable(self) -> None:
+        """label=1 (Cable) is in misc category."""
+        obs = VisionObstacleInfo(id=1, label=1)
+        assert obs.category == "misc"
+
+    def test_category_misc_unknown_label(self) -> None:
+        """Unknown label defaults to misc category."""
+        obs = VisionObstacleInfo(id=1, label=99)
+        assert obs.category == "misc"
+
+    def test_to_grid_coords(self) -> None:
+        """to_grid_coords subtracts origin correctly."""
+        obs = VisionObstacleInfo(id=1, label=5, center_x=-10.0, center_y=-20.0)
+        gx, gy = obs.to_grid_coords(origin_x=-280, origin_y=-341)
+        assert abs(gx - 270.0) < 0.01
+        assert abs(gy - 321.0) < 0.01
+
+    def test_to_grid_coords_zero_origin(self) -> None:
+        """to_grid_coords with zero origin returns center coords directly."""
+        obs = VisionObstacleInfo(id=1, label=1, center_x=50.0, center_y=75.0)
+        gx, gy = obs.to_grid_coords(origin_x=0, origin_y=0)
+        assert abs(gx - 50.0) < 0.01
+        assert abs(gy - 75.0) < 0.01
+
+
+class TestParseVisionObstacles:
+    """Tests for _parse_vision_obstacles function."""
+
+    def test_parse_field9_basic(self) -> None:
+        """_parse_vision_obstacles parses field 9 items from display_map."""
+        # Field 9 schema: {1: type_id, 2: detection_seq, 3: unknown, 4: constant, 5: constant}
+        field9 = [
+            {"1": 1, "2": 101, "3": 1, "4": 1, "5": 2},  # Cable, seq=101
+            {"1": 5, "2": 102, "3": 2, "4": 1, "5": 2},  # Shoes, seq=102
+        ]
+        decoded = {"9": field9}
+        obstacles = _parse_vision_obstacles(decoded)
+        assert len(obstacles) == 2
+        assert obstacles[0].label == 1
+        assert obstacles[0].display_name == "Cable"
+        assert obstacles[0].id == 101
+        assert obstacles[1].label == 5
+        assert obstacles[1].display_name == "Shoes"
+        assert obstacles[1].id == 102
+
+    def test_parse_field9_type_id_zero_unknown(self) -> None:
+        """type_id=0 (missing field 1) is handled as label=0, display_name='Obstacle 0'."""
+        # When type_id=0, bbp omits field 1 entirely
+        field9 = [
+            {"2": 103, "3": 1, "4": 1, "5": 2},  # type_id missing (=0)
+        ]
+        decoded = {"9": field9}
+        obstacles = _parse_vision_obstacles(decoded)
+        assert len(obstacles) == 1
+        assert obstacles[0].label == 0
+        assert obstacles[0].id == 103
+
+    def test_parse_field9_single_item_dict(self) -> None:
+        """Handles single item returned as dict instead of list."""
+        decoded = {"9": {"1": 2, "2": 200, "3": 1, "4": 1, "5": 2}}
+        obstacles = _parse_vision_obstacles(decoded)
+        assert len(obstacles) == 1
+        assert obstacles[0].label == 2
+
+    def test_parse_empty_field9(self) -> None:
+        """Returns empty list when field 9 is absent."""
+        obstacles = _parse_vision_obstacles({})
+        assert obstacles == []
+
+    def test_parse_empty_list(self) -> None:
+        """Returns empty list when field 9 is empty list."""
+        obstacles = _parse_vision_obstacles({"9": []})
+        assert obstacles == []
+
+    def test_parse_malformed_data(self) -> None:
+        """Returns empty list for malformed/non-dict data."""
+        obstacles = _parse_vision_obstacles({"9": "not a list"})
+        assert obstacles == []
+
+    def test_parse_skips_non_dict_items(self) -> None:
+        """Skips non-dict items in field 9 list."""
+        decoded = {"9": [
+            "bad",
+            42,
+            {"1": 3, "2": 104},
+        ]}
+        obstacles = _parse_vision_obstacles(decoded)
+        assert len(obstacles) == 1
+        assert obstacles[0].label == 3
+
+    def test_parse_deduplicates_by_id(self) -> None:
+        """Deduplicates detections by detection_seq (used as id)."""
+        decoded = {"9": [
+            {"1": 1, "2": 101},
+            {"1": 1, "2": 101},  # duplicate
+            {"1": 2, "2": 102},
+        ]}
+        obstacles = _parse_vision_obstacles(decoded)
+        assert len(obstacles) == 2
+
+
+class TestNarwalStateVisionObstacles:
+    """Tests for NarwalState.vision_obstacles field."""
+
+    def test_default_vision_obstacles_empty(self) -> None:
+        """NarwalState.vision_obstacles defaults to empty list."""
+        state = NarwalState()
+        assert state.vision_obstacles == []
+
+    def test_vision_obstacles_is_list(self) -> None:
+        """vision_obstacles is a mutable list."""
+        state = NarwalState()
+        obs = VisionObstacleInfo(id=1, label=5)
+        state.vision_obstacles.append(obs)
+        assert len(state.vision_obstacles) == 1

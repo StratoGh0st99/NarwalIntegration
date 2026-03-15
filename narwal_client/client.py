@@ -51,7 +51,7 @@ from .const import (
     FanLevel,
     MopHumidity,
 )
-from .models import CommandResponse, DeviceInfo, MapData, MapDisplayData, NarwalState
+from .models import CommandResponse, DeviceInfo, MapData, MapDisplayData, NarwalState, VisionObstacleInfo
 from .protocol import (
     PROTOBUF_FIELD5_TAG,
     NarwalMessage,
@@ -423,6 +423,15 @@ class NarwalClient:
                 self.state.map_display_data.robot_y,
                 self.state.map_display_data.timestamp,
             )
+            # Parse vision obstacle detections from field 9
+            from .models import _parse_vision_obstacles
+            new_detections = _parse_vision_obstacles(decoded)
+            if new_detections:
+                existing_ids = {o.id for o in self.state.vision_obstacles}
+                for obs in new_detections:
+                    if obs.id not in existing_ids:
+                        self.state.vision_obstacles.append(obs)
+                        existing_ids.add(obs.id)
 
         if self.on_state_update:
             self.on_state_update(self.state)

@@ -178,6 +178,149 @@ def _to_float32(val: Any) -> float | None:
     return None
 
 
+@dataclass
+class VisionObstacleInfo:
+    """A camera-detected transient obstacle (vision detection during cleaning).
+
+    Parsed from display_map broadcast field 9 (current detections).
+    Field 9 schema: {1: type_id, 2: detection_seq, 3-5: metadata}
+    type_id=0 appears when bbp omits field 1 (unknown detection).
+
+    Types 1-42 from APK 3d-map.js vision obstacle enum.
+    IDs 23, 24, 33 are not in the APK switch statement — fall back to "Obstacle N".
+    """
+
+    id: int = 0              # detection_sequence from field 2 (used for dedup)
+    label: int = 0           # vision type enum (1-42), field 1
+    center_x: float = 0.0   # world X coordinate (from field 12 trail segments)
+    center_y: float = 0.0   # world Y coordinate (from field 12 trail segments)
+    width: float = 0.0       # object width (reserved, not yet parsed)
+    height: float = 0.0      # object height (reserved, not yet parsed)
+    angle: int = 0           # rotation in degrees (reserved)
+    type_name: str = ""      # robot-provided name (may be empty)
+    image_data: str = ""     # base64 photo (ignored for map rendering)
+
+    # Full vision obstacle type enum from APK 3d-map.js getModelPath() (lines 33410-33491)
+    # IDs 23, 24, 33 are absent from the APK switch statement.
+    TYPE_NAMES: ClassVar[dict[int, str]] = {
+        1: "Cable",
+        2: "Tissue",
+        3: "Pet Waste",
+        4: "Liquid",
+        5: "Shoes",
+        6: "Solid Debris",
+        7: "Fabric",
+        8: "Plastic Bag",
+        9: "Trash Can",
+        10: "Unknown Object",
+        11: "Stain",
+        12: "Fabric",
+        13: "Obstacle",
+        14: "Obstacle",
+        15: "Pet",
+        16: "Drop-off",
+        17: "Squat Toilet",
+        18: "U-Shaped Chair",
+        19: "Office Chair",
+        20: "Floor Mirror",
+        21: "Book",
+        22: "Stick",
+        25: "Valuable Item",
+        26: "Valuable Item",
+        27: "Valuable Item",
+        28: "Valuable Item",
+        29: "Valuable Item",
+        30: "Valuable Item",
+        31: "Valuable Item",
+        32: "Valuable Item",
+        34: "Toy",
+        35: "Plant",
+        36: "Fitness Equipment",
+        37: "Pet Toy",
+        38: "Hazardous Item",
+        39: "Decoration",
+        40: "Box",
+        41: "Cat",
+        42: "Dog",
+    }
+
+    # Category grouping for color-coded overlay rendering
+    # hazard = red-amber, clothing = yellow, pet = orange, misc = amber
+    CATEGORIES: ClassVar[dict[str, set[int]]] = {
+        "hazard": {3, 4, 11, 16, 38},
+        "clothing": {5, 7, 12},
+        "pet": {15, 37, 41, 42},
+    }
+
+    @property
+    def display_name(self) -> str:
+        """Return display name: type_name from robot, then enum lookup, then fallback."""
+        if self.type_name:
+            return self.type_name
+        return self.TYPE_NAMES.get(self.label, f"Obstacle {self.label}")
+
+    @property
+    def category(self) -> str:
+        """Return category string for color mapping: hazard, clothing, pet, or misc."""
+        for cat, labels in self.CATEGORIES.items():
+            if self.label in labels:
+                return cat
+        return "misc"
+
+    def to_grid_coords(self, origin_x: int, origin_y: int) -> tuple[float, float]:
+        """Convert world coordinates to grid pixel coordinates.
+
+        Same transform as dock/robot/obstacles: pixel = raw - origin.
+        """
+        return (self.center_x - origin_x, self.center_y - origin_y)
+
+
+def _parse_vision_obstacles(decoded: dict) -> list["VisionObstacleInfo"]:
+    """Parse vision obstacle detections from display_map broadcast field 9.
+
+    Field 9 schema (from probe data 2026-03-15):
+      field 1: type_id (int32, 0=unknown — omitted by bbp when 0)
+      field 2: detection_sequence (incrementing counter, used as ID for dedup)
+      field 3: unknown (1 or 2)
+      field 4: constant (1)
+      field 5: constant (2)
+
+    Args:
+        decoded: The bbp-decoded dict from a display_map broadcast.
+
+    Returns:
+        List of VisionObstacleInfo objects. Deduplicates by detection_seq.
+        Returns empty list for missing/malformed data.
+    """
+    field9 = decoded.get("9")
+    if not field9:
+        return []
+
+    if isinstance(field9, dict):
+        field9 = [field9]
+    elif not isinstance(field9, list):
+        return []
+
+    obstacles: list[VisionObstacleInfo] = []
+    seen_ids: set[int] = set()
+    for item in field9:
+        if not isinstance(item, dict):
+            continue
+        try:
+            detection_seq = int(item.get("2", 0))
+            if detection_seq in seen_ids:
+                continue
+            seen_ids.add(detection_seq)
+            type_id = int(item.get("1", 0))
+            obstacles.append(VisionObstacleInfo(
+                id=detection_seq,
+                label=type_id,
+            ))
+        except (ValueError, TypeError, AttributeError):
+            continue
+    return obstacles
+
+
 def _parse_obstacles(field32: dict) -> list[ObstacleInfo]:
     """Parse obstacle/furniture annotations from bbp-decoded field 2.32.
 
@@ -488,6 +631,11 @@ class NarwalState:
     # Map
     map_data: MapData | None = None
     map_display_data: MapDisplayData | None = None
+
+    # Vision obstacles (camera-detected transient objects during cleaning)
+    # Parsed from display_map field 9. Accumulates during cleaning session.
+    # Cleared by camera.py on new session start.
+    vision_obstacles: list[VisionObstacleInfo] = field(default_factory=list)
 
     # Download/upgrade status
     download_status: int = 0
