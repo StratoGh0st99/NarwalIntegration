@@ -47,6 +47,7 @@ from .const import (
     TOPIC_CMD_YELL,
     DEFAULT_TOPIC_PREFIX,
     WAKE_TIMEOUT,
+    CommandResult,
     FanLevel,
     MopHumidity,
 )
