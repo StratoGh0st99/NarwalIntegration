@@ -3,12 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-09T23:33:15.639Z"
+stopped_at: Phase 11 plan 11-01 task 2 — vision obstacle data source investigation. get_vision_image returns NOT_APPLICABLE. App shows obstacles but we can't find the WebSocket source. Deep APK reverse-engineering done (3d-map.js, MapVisionInfo schema, StaticMapPayload). See .continue-here.md for full context.
+last_updated: "2026-03-15T14:30:44.089Z"
+last_activity: 2026-03-09 — Obstacle type names corrected to APK furniture enum
 progress:
   total_phases: 5
-  completed_phases: 3
-  total_plans: 8
-  completed_plans: 7
+  completed_phases: 5
+  total_plans: 10
+  completed_plans: 10
+  percent: 60
 ---
 
 # Project State
@@ -69,12 +72,20 @@ Progress: [██████░░░░] 60% (3/5 post-v0.5 phases complete)
 - Obstacles render on base map (static, cached) not overlay
 - Skip rotation for v1 — axis-aligned rectangles sufficient
 
+### Key Decisions (Phase 11)
+
+- Vision obstacle data source: display_map field 9 (confirmed by probe in plan 11-01)
+- detection_seq (field 2) used as dedup ID — robot provides unique incrementing counter
+- VisionObstacleInfo is a separate dataclass from ObstacleInfo — different lifecycle and data source
+- render_overlay extended with backward-compatible vision_obstacles + origin_x/origin_y params (default None/0)
+- Vision obstacles cleared in _reset_trail() — same lifecycle hook as trail (fires on new cleaning session)
+- Field 9 has type_id + detection_seq but NOT coordinates — field 12 coordinate parsing deferred
+
 ### Blockers/Concerns
 
 None
 
 ## Session Continuity
 
-Last session: 2026-03-11
-Stopped at: Phase 11 plan 11-01 task 2 — vision obstacle data source investigation. get_vision_image returns NOT_APPLICABLE. App shows obstacles but we can't find the WebSocket source. Deep APK reverse-engineering done (3d-map.js, MapVisionInfo schema, StaticMapPayload). See .continue-here.md for full context.
-Resume file: .planning/phases/11-vision-obstacles/.continue-here.md
+Last session: 2026-03-15
+Stopped at: Completed Phase 11 plan 11-02 (vision obstacle implementation). 174 tests passing.
