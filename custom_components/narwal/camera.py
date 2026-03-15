@@ -140,6 +140,8 @@ class NarwalMapCamera(NarwalEntity, Camera):
         self._trail.clear()
         self._last_trail_record = 0.0
         self._vision_obstacles = []
+        # Also clear client-side accumulator so old detections don't re-feed
+        self.coordinator.client.state.vision_obstacles.clear()
 
     def _record_trail_position(self, grid_x: float, grid_y: float) -> None:
         """Record a grid-coordinate position to the cleaning trail."""
@@ -164,12 +166,8 @@ class NarwalMapCamera(NarwalEntity, Camera):
             WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
         )
         if is_cleaning and not was_cleaning:
-            _LOGGER.info("New cleaning session — clearing trail")
+            _LOGGER.info("New cleaning session — clearing trail and vision obstacles")
             self._reset_trail()
-        elif was_cleaning and not is_cleaning:
-            _LOGGER.info("Cleaning ended — clearing vision obstacles")
-            self._vision_obstacles = []
-            state.vision_obstacles.clear()
         if current_status != WorkingStatus.UNKNOWN:
             self._last_cleaning_status = current_status
 
