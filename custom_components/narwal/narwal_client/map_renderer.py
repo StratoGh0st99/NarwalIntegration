@@ -622,11 +622,8 @@ def render_overlay(
         }
         try:
             from PIL import ImageFont
-            try:
-                vis_font = ImageFont.truetype("arial.ttf", 4)
-            except (IOError, OSError):
-                vis_font = ImageFont.load_default()
-        except ImportError:
+            vis_font = ImageFont.load_default(size=6)
+        except (ImportError, TypeError):
             vis_font = None
 
         dot_radius = max(4, min(width, height) // 60)
