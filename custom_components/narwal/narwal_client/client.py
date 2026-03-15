@@ -270,6 +270,28 @@ class NarwalClient:
             f"No response or broadcast within {timeout}s — check vacuum IP and power"
         )
 
+    async def drain_ws_buffer(self) -> None:
+        """Drain any pending messages from the WebSocket receive buffer.
+
+        Called between discover_device_id() and send_command() to clear
+        stale field5 responses left by wake probe commands. Without this,
+        _wait_for_field5_response may consume a stale response instead of
+        the real one, which can have unexpected data or error codes.
+        """
+        if not self.connected:
+            return
+        drained = 0
+        while True:
+            try:
+                data = await asyncio.wait_for(self._ws.recv(), timeout=0.05)
+                drained += 1
+            except asyncio.TimeoutError:
+                break
+            except Exception:
+                break
+        if drained:
+            _LOGGER.debug("Drained %d stale messages from WebSocket buffer", drained)
+
     async def disconnect(self) -> None:
         """Disconnect from the vacuum and stop all tasks."""
         self._should_reconnect = False

@@ -53,8 +53,15 @@ class NarwalConfigFlow(ConfigFlow, domain=DOMAIN):
                 await client.connect()
                 # Discover device_id from broadcast, then query info
                 await client.discover_device_id(timeout=15.0)
+                # Drain any stale field5 responses left in the WebSocket
+                # buffer from discover's wake probes before sending a
+                # real command
+                await client.drain_ws_buffer()
                 device_info = await client.get_device_info()
-            except (NarwalConnectionError, NarwalCommandError, Exception):
+            except Exception as ex:
+                _LOGGER.warning(
+                    "Setup failed: %s: %s", type(ex).__name__, ex,
+                )
                 errors["base"] = "cannot_connect"
             else:
                 device_id = device_info.device_id
