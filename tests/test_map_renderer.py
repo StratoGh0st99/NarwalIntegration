@@ -4,6 +4,7 @@ Covers MAP-01 (map rendering pipeline) validation gaps:
   - render_base_map returns valid PIL Image with rooms and dock
   - render_base_map handles empty/missing grid data gracefully
   - render_overlay returns valid PNG bytes with trail and robot
+  - render_overlay with vision_obstacles draws colored circles
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from narwal_client.map_renderer import (
     OBSTACLE_COLORS,
     OBSTACLE_COLOR_DEFAULT,
 )
-from narwal_client.models import ObstacleInfo
+from narwal_client.models import ObstacleInfo, VisionObstacleInfo
 
 
 def _make_compressed_grid(width: int, height: int, fill_value: int = 0) -> bytes:
@@ -298,3 +299,155 @@ class TestObstacleRendering:
         assert result_with is not None
         # Images should differ (obstacle drawn on one but not other)
         assert list(result_without.getdata()) != list(result_with.getdata())
+
+
+class TestVisionObstacleOverlay:
+    """Tests for vision obstacle rendering on the overlay layer."""
+
+    def _make_base_image(self, width: int = 100, height: int = 100):
+        """Create a simple base PIL Image for overlay tests."""
+        from PIL import Image
+        return Image.new("RGB", (width, height), (100, 149, 237))
+
+    def test_render_overlay_with_vision_obstacles_returns_valid_png(self) -> None:
+        """render_overlay with vision_obstacles returns valid PNG bytes."""
+        base = self._make_base_image()
+        obs = VisionObstacleInfo(id=101, label=5, center_x=50.0, center_y=50.0)
+        result = render_overlay(
+            base, height=100,
+            robot_x=50.0, robot_y=50.0,
+            vision_obstacles=[obs],
+            origin_x=0, origin_y=0,
+        )
+        assert isinstance(result, bytes)
+        assert result[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_render_overlay_without_vision_obstacles_unchanged(self) -> None:
+        """render_overlay with vision_obstacles=None produces valid PNG (no regression)."""
+        base = self._make_base_image()
+        result_none = render_overlay(base, height=100, robot_x=50.0, robot_y=50.0)
+        result_empty = render_overlay(
+            base, height=100, robot_x=50.0, robot_y=50.0,
+            vision_obstacles=None,
+        )
+        assert isinstance(result_none, bytes)
+        assert isinstance(result_empty, bytes)
+        assert result_none[:8] == b"\x89PNG\r\n\x1a\n"
+        assert result_empty[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_vision_obstacle_modifies_overlay(self) -> None:
+        """An in-bounds vision obstacle should change pixels compared to no-obstacle render."""
+        base = self._make_base_image(width=100, height=100)
+        obs = VisionObstacleInfo(id=101, label=1, center_x=50.0, center_y=50.0)
+
+        result_without = render_overlay(base, height=100)
+        result_with = render_overlay(
+            base, height=100,
+            vision_obstacles=[obs],
+            origin_x=0, origin_y=0,
+        )
+
+        assert isinstance(result_without, bytes)
+        assert isinstance(result_with, bytes)
+        # Images should differ (obstacle dot drawn on one)
+        from PIL import Image
+        img_without = Image.open(io.BytesIO(result_without))
+        img_with = Image.open(io.BytesIO(result_with))
+        assert list(img_without.getdata()) != list(img_with.getdata())
+
+    def test_hazard_obstacle_uses_red_amber_color(self) -> None:
+        """Hazard category obstacles (label=3, Pet Waste) render in red-amber tones."""
+        from PIL import Image
+        base = self._make_base_image(width=100, height=100)
+        # Pet Waste (label=3) -> hazard category -> red-amber (212, 85, 58)
+        obs = VisionObstacleInfo(id=103, label=3, center_x=50.0, center_y=50.0)
+        result = render_overlay(
+            base, height=100,
+            vision_obstacles=[obs],
+            origin_x=0, origin_y=0,
+        )
+        img = Image.open(io.BytesIO(result))
+        # The circle center at (50, 49) in image coords (Y-flipped: 100-1-50=49)
+        center_px = img.getpixel((50, 49))
+        # Red-amber has high red, low-mid green, low blue
+        r, g, b = center_px[0], center_px[1], center_px[2]
+        assert r > 150, f"Expected reddish color, got ({r}, {g}, {b})"
+
+    def test_clothing_obstacle_uses_yellow_color(self) -> None:
+        """Clothing category obstacles (label=5, Shoes) render in yellow tones."""
+        from PIL import Image
+        base = self._make_base_image(width=100, height=100)
+        # Shoes (label=5) -> clothing category -> yellow (232, 184, 48)
+        obs = VisionObstacleInfo(id=105, label=5, center_x=50.0, center_y=50.0)
+        result = render_overlay(
+            base, height=100,
+            vision_obstacles=[obs],
+            origin_x=0, origin_y=0,
+        )
+        img = Image.open(io.BytesIO(result))
+        center_px = img.getpixel((50, 49))
+        r, g, b = center_px[0], center_px[1], center_px[2]
+        # Yellow has high red and high green
+        assert r > 150 and g > 100, f"Expected yellow color, got ({r}, {g}, {b})"
+
+    def test_vision_obstacles_render_before_robot(self) -> None:
+        """Vision obstacles render at a different position from robot (non-overlapping)."""
+        from PIL import Image
+        base = self._make_base_image(width=100, height=100)
+        # Obstacle at (20, 20), robot at (80, 80)
+        obs = VisionObstacleInfo(id=101, label=1, center_x=20.0, center_y=20.0)
+        result = render_overlay(
+            base, height=100,
+            robot_x=80.0, robot_y=80.0,
+            vision_obstacles=[obs],
+            origin_x=0, origin_y=0,
+        )
+        img = Image.open(io.BytesIO(result))
+        # Robot position (blue dot) at (80, 19) in image coords (Y-flip: 100-1-80=19)
+        robot_px = img.getpixel((80, 19))
+        r, g, b = robot_px[0], robot_px[1], robot_px[2]
+        assert b > 100, f"Expected blue robot dot, got ({r}, {g}, {b})"
+
+    def test_out_of_bounds_vision_obstacle_skipped(self) -> None:
+        """Vision obstacles with out-of-bounds grid coords are skipped (no crash)."""
+        base = self._make_base_image(width=50, height=50)
+        obs = VisionObstacleInfo(id=999, label=1, center_x=500.0, center_y=500.0)
+        result = render_overlay(
+            base, height=50,
+            vision_obstacles=[obs],
+            origin_x=0, origin_y=0,
+        )
+        assert isinstance(result, bytes)
+        assert result[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_render_overlay_backward_compatible_no_new_args(self) -> None:
+        """render_overlay still works with only the original parameters."""
+        base = self._make_base_image()
+        result = render_overlay(
+            base, height=100,
+            robot_x=50.0, robot_y=50.0,
+            robot_heading=90.0,
+            trail=[(10.0, 10.0), (20.0, 20.0)],
+        )
+        assert isinstance(result, bytes)
+        assert result[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_multiple_vision_obstacles_render(self) -> None:
+        """Multiple vision obstacles of different categories all render."""
+        from PIL import Image
+        base = self._make_base_image(width=200, height=200)
+        obstacles = [
+            VisionObstacleInfo(id=1, label=3, center_x=30.0, center_y=30.0),   # hazard
+            VisionObstacleInfo(id=2, label=5, center_x=80.0, center_y=80.0),   # clothing
+            VisionObstacleInfo(id=3, label=41, center_x=130.0, center_y=130.0), # pet
+            VisionObstacleInfo(id=4, label=1, center_x=170.0, center_y=170.0),  # misc
+        ]
+        result = render_overlay(
+            base, height=200,
+            vision_obstacles=obstacles,
+            origin_x=0, origin_y=0,
+        )
+        assert isinstance(result, bytes)
+        assert result[:8] == b"\x89PNG\r\n\x1a\n"
+        img = Image.open(io.BytesIO(result))
+        assert img.size == (200, 200)

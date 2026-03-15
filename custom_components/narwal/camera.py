@@ -68,6 +68,8 @@ class NarwalMapCamera(NarwalEntity, Camera):
         self._trail: list[tuple[float, float]] = []
         self._last_trail_record: float = 0.0
         self._last_cleaning_status: WorkingStatus = WorkingStatus.UNKNOWN
+        # Vision obstacles — accumulated during cleaning, cleared on new session
+        self._vision_obstacles: list = []
         # Debug view state — full session trail with growing viewport
         self._dock_pos: tuple[float, float] | None = None
         self._vp_min_x: float = 0.0
@@ -134,9 +136,10 @@ class NarwalMapCamera(NarwalEntity, Camera):
                 self._vp_max_y = y
 
     def _reset_trail(self) -> None:
-        """Clear trail for a new cleaning session."""
+        """Clear trail and vision obstacles for a new cleaning session."""
         self._trail.clear()
         self._last_trail_record = 0.0
+        self._vision_obstacles = []
 
     def _record_trail_position(self, grid_x: float, grid_y: float) -> None:
         """Record a grid-coordinate position to the cleaning trail."""
@@ -188,6 +191,14 @@ class NarwalMapCamera(NarwalEntity, Camera):
                 )
                 if grid_pos is not None:
                     self._record_trail_position(grid_pos[0], grid_pos[1])
+
+            # Accumulate vision obstacles (new detections only, dedup by id)
+            if state.vision_obstacles:
+                existing_ids = {o.id for o in self._vision_obstacles}
+                for obs in state.vision_obstacles:
+                    if obs.id not in existing_ids:
+                        self._vision_obstacles.append(obs)
+                        existing_ids.add(obs.id)
 
             static_ts = static_map.created_at or 0
             trail_len = len(self._trail)
@@ -327,6 +338,7 @@ class NarwalMapCamera(NarwalEntity, Camera):
                         _LOGGER.exception("POSITION DIAG failed")
 
         trail = list(self._trail) if self._trail else None
+        vision_obstacles = list(self._vision_obstacles) if self._vision_obstacles else None
 
         try:
             png_bytes = await self.hass.async_add_executor_job(
@@ -337,6 +349,9 @@ class NarwalMapCamera(NarwalEntity, Camera):
                 robot_y,
                 robot_heading,
                 trail,
+                vision_obstacles,
+                static_map.origin_x,
+                static_map.origin_y,
             )
 
             if png_bytes:
