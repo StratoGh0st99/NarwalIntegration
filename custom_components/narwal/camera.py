@@ -25,7 +25,6 @@ _MIN_RENDER_INTERVAL = 2
 # Trail recording (used in both debug and normal modes)
 _TRAIL_MAX_POINTS = 50000  # full cleaning session worth
 _TRAIL_RECORD_INTERVAL = 3  # seconds between trail point recordings
-_VISION_MERGE_RADIUS = 15  # grid-pixels: detections closer than this are one object
 
 # Debug view: blank canvas with robot dot + trail.
 # Set to False to use the real map renderer instead.
@@ -69,8 +68,6 @@ class NarwalMapCamera(NarwalEntity, Camera):
         self._trail: list[tuple[float, float]] = []
         self._last_trail_record: float = 0.0
         self._last_cleaning_status: WorkingStatus = WorkingStatus.UNKNOWN
-        # Vision obstacles — accumulated during cleaning, cleared on new session
-        self._vision_obstacles: list = []
         # Debug view state — full session trail with growing viewport
         self._dock_pos: tuple[float, float] | None = None
         self._vp_min_x: float = 0.0
@@ -137,12 +134,9 @@ class NarwalMapCamera(NarwalEntity, Camera):
                 self._vp_max_y = y
 
     def _reset_trail(self) -> None:
-        """Clear trail and vision obstacles for a new cleaning session."""
+        """Clear trail for a new cleaning session."""
         self._trail.clear()
         self._last_trail_record = 0.0
-        self._vision_obstacles = []
-        # Also clear client-side accumulator so old detections don't re-feed
-        self.coordinator.client.state.vision_obstacles.clear()
 
     def _record_trail_position(self, grid_x: float, grid_y: float) -> None:
         """Record a grid-coordinate position to the cleaning trail."""
@@ -194,28 +188,6 @@ class NarwalMapCamera(NarwalEntity, Camera):
                 )
                 if grid_pos is not None:
                     self._record_trail_position(grid_pos[0], grid_pos[1])
-
-            # Accumulate vision obstacles with spatial clustering.
-            # The robot generates many detection_seqs for the same physical
-            # object across passes.  Merge detections of the same type that
-            # are within _VISION_MERGE_RADIUS grid-pixels of each other.
-            if state.vision_obstacles and static_map:
-                for obs in state.vision_obstacles:
-                    gx, gy = obs.to_grid_coords(
-                        static_map.origin_x, static_map.origin_y,
-                    )
-                    merged = False
-                    for existing in self._vision_obstacles:
-                        if existing.label != obs.label:
-                            continue
-                        ex, ey = existing.to_grid_coords(
-                            static_map.origin_x, static_map.origin_y,
-                        )
-                        if (gx - ex) ** 2 + (gy - ey) ** 2 <= _VISION_MERGE_RADIUS ** 2:
-                            merged = True
-                            break
-                    if not merged:
-                        self._vision_obstacles.append(obs)
 
             static_ts = static_map.created_at or 0
             trail_len = len(self._trail)
@@ -355,7 +327,6 @@ class NarwalMapCamera(NarwalEntity, Camera):
                         _LOGGER.exception("POSITION DIAG failed")
 
         trail = list(self._trail) if self._trail else None
-        vision_obstacles = list(self._vision_obstacles) if self._vision_obstacles else None
 
         try:
             png_bytes = await self.hass.async_add_executor_job(
@@ -366,9 +337,6 @@ class NarwalMapCamera(NarwalEntity, Camera):
                 robot_y,
                 robot_heading,
                 trail,
-                vision_obstacles,
-                static_map.origin_x,
-                static_map.origin_y,
             )
 
             if png_bytes:

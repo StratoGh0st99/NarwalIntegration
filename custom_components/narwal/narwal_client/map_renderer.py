@@ -574,11 +574,8 @@ def render_overlay(
     robot_y: float | None = None,
     robot_heading: float | None = None,
     trail: list[tuple[float, float]] | None = None,
-    vision_obstacles: list | None = None,
-    origin_x: int = 0,
-    origin_y: int = 0,
 ) -> bytes:
-    """Draw robot position, trail, and vision obstacles on a copy of the cached base map.
+    """Draw robot position and trail on a copy of the cached base map.
 
     Args:
         base_img: Cached PIL Image from render_base_map (not modified).
@@ -587,9 +584,6 @@ def render_overlay(
         robot_y: Robot Y in grid coordinates.
         robot_heading: Heading in degrees.
         trail: List of (grid_x, grid_y) positions to draw as cleaning path.
-        vision_obstacles: List of VisionObstacleInfo objects to render (optional).
-        origin_x: Map origin X offset for vision obstacle coordinate transform.
-        origin_y: Map origin Y offset for vision obstacle coordinate transform.
 
     Returns:
         PNG bytes of the composited image.
@@ -612,50 +606,7 @@ def render_overlay(
             x2, y2 = int(trail[i + 1][0]), height - 1 - int(trail[i + 1][1])
             draw.line([(x1, y1), (x2, y2)], fill=color, width=2)
 
-    # Draw vision obstacles (before robot so robot draws on top)
-    if vision_obstacles:
-        VISION_COLORS = {
-            "hazard": (212, 85, 58),     # Red-amber — pet waste, liquids, cliffs
-            "clothing": (232, 184, 48),  # Yellow — shoes, socks, fabric
-            "pet": (224, 120, 48),       # Orange — live pets, pet toys
-            "misc": (200, 144, 32),      # Amber — cables, debris, misc
-        }
-        try:
-            from PIL import ImageFont
-            vis_font = ImageFont.load_default(size=6)
-        except (ImportError, TypeError):
-            vis_font = None
-
-        dot_radius = max(4, min(width, height) // 60)
-        for obs in vision_obstacles:
-            gx, gy = obs.to_grid_coords(origin_x, origin_y)
-            img_x = int(gx)
-            img_y = height - 1 - int(gy)  # Y-flip same as robot/trail
-            if 0 <= img_x < width and 0 <= img_y < height:
-                color = VISION_COLORS.get(obs.category, VISION_COLORS["misc"])
-                # Filled circle with white outline
-                draw.ellipse(
-                    [img_x - dot_radius, img_y - dot_radius,
-                     img_x + dot_radius, img_y + dot_radius],
-                    fill=color,
-                    outline=(255, 255, 255),
-                )
-                # Type label to the right of the dot
-                label_text = obs.display_name
-                label_x = img_x + dot_radius + 2
-                label_y = img_y - dot_radius
-                if vis_font is not None:
-                    # Dark outline for readability
-                    for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                        draw.text(
-                            (label_x + dx, label_y + dy),
-                            label_text,
-                            fill=(0, 0, 0),
-                            font=vis_font,
-                        )
-                    draw.text((label_x, label_y), label_text, fill=(255, 255, 255), font=vis_font)
-
-    # Draw robot (on top of vision obstacles)
+    # Draw robot
     if robot_x is not None and robot_y is not None:
         rx = int(robot_x)
         ry = height - 1 - int(robot_y)
