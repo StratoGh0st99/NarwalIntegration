@@ -3,12 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-15T14:44:11.914Z"
+stopped_at: Completed 12-camera-patrol-01-PLAN.md
+last_updated: "2026-03-16T02:37:43.879Z"
+last_activity: 2026-03-15 — Vision obstacle feature built, tested, removed
 progress:
-  total_phases: 5
+  total_phases: 6
   completed_phases: 5
-  total_plans: 10
-  completed_plans: 10
+  total_plans: 12
+  completed_plans: 11
+  percent: 70
 ---
 
 # Project State
@@ -18,15 +21,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-01)
 
 **Core value:** Users can control and monitor their Narwal Flow vacuum entirely locally — start/stop/pause, see status, view a live floor map — without any cloud dependency.
-**Current focus:** Phase 10 COMPLETE — Next: Phase 11 (Vision Obstacles) or Phase 12 (Camera & Patrol)
+**Current focus:** Phase 12 Plan 01 COMPLETE — camera snapshot, LED control, burst service
 
 ## Current Position
 
-Phase: 10 of 12 — COMPLETE (Obstacle Mapping)
-Next phase: 11 (Vision Obstacles — needs probing during clean) or 12 (Camera & Patrol)
-Last activity: 2026-03-09 — Obstacle type names corrected to APK furniture enum
+Phase: 12 of 12 — IN PROGRESS (Camera & Patrol)
+Plan: 01 of ? — Complete (Camera snapshot + LED building blocks)
+Last activity: 2026-03-16 — Take Photo button, Camera Light switch, NarwalSnapshotCamera, narwal.take_snapshot service
 
-Progress: [██████░░░░] 60% (3/5 post-v0.5 phases complete)
+Progress: [█████████░] 92% (11/12 plans done)
 
 ## Accumulated Context
 
@@ -78,11 +81,19 @@ Progress: [██████░░░░] 60% (3/5 post-v0.5 phases complete)
 - Vision obstacles cleared in _reset_trail() — same lifecycle hook as trail (fires on new cleaning session)
 - Field 9 has type_id + detection_seq but NOT coordinates — field 12 coordinate parsing deferred
 
+### Key Decisions (Phase 12, Plan 01)
+
+- Snapshot camera is_streaming=False — privacy-first, only fires on explicit button press or service call
+- AES-encrypted images stored as raw bytes until APK decryption key extracted — NarwalSnapshotCamera will not display correctly until future plan
+- HA test stubs for ButtonEntity/SwitchEntity/Camera use plain class stubs (not MagicMock) to avoid __setattr__ MRO conflicts when entities are instantiated in tests
+- Service registered idempotently via has_service guard in async_setup_entry
+
 ### Blockers/Concerns
 
 None
 
 ## Session Continuity
 
-Last session: 2026-03-15
-Stopped at: Completed Phase 11 plan 11-02 (vision obstacle implementation). 174 tests passing.
+Last session: 2026-03-16T02:37:43.878Z
+Stopped at: Completed 12-camera-patrol-01-PLAN.md
+Resume file: None
