@@ -51,16 +51,6 @@
           "off": "Undocked"
         }
       }
-    },
-    "button": {
-      "take_photo": {
-        "name": "Take Photo"
-      }
-    },
-    "switch": {
-      "camera_light": {
-        "name": "Camera Light"
-      }
     }
   }
 }

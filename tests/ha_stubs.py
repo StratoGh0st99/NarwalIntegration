@@ -35,8 +35,6 @@ def install() -> None:
     vol.Required = MagicMock(side_effect=lambda *a, **kw: a[0] if a else "key")  # type: ignore[attr-defined]
     vol.Optional = MagicMock(side_effect=lambda *a, **kw: a[0] if a else "key")  # type: ignore[attr-defined]
     vol.In = MagicMock()  # type: ignore[attr-defined]
-    vol.All = MagicMock(side_effect=lambda *a: a[-1] if a else None)  # type: ignore[attr-defined]
-    vol.Range = MagicMock(return_value=lambda x: x)  # type: ignore[attr-defined]
 
     # --- homeassistant ---
     ha = _mod("homeassistant")
@@ -207,30 +205,3 @@ def install() -> None:
             pass
 
     ha_cam.Camera = _Camera  # type: ignore[attr-defined]
-    ha_cam.async_get_still_stream = MagicMock()  # type: ignore[attr-defined]
-
-    ha_btn = _mod("homeassistant.components.button", ha_comp)
-
-    class _ButtonEntity:
-        """Stub for ButtonEntity base class."""
-
-        def __init_subclass__(cls, **kw: object) -> None:
-            pass
-
-        def async_write_ha_state(self) -> None:
-            pass
-
-    ha_btn.ButtonEntity = _ButtonEntity  # type: ignore[attr-defined]
-
-    ha_sw = _mod("homeassistant.components.switch", ha_comp)
-
-    class _SwitchEntity:
-        """Stub for SwitchEntity base class."""
-
-        def __init_subclass__(cls, **kw: object) -> None:
-            pass
-
-        def async_write_ha_state(self) -> None:
-            pass
-
-    ha_sw.SwitchEntity = _SwitchEntity  # type: ignore[attr-defined]

@@ -5,8 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -62,7 +61,6 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
         self._last_display_map_resub: float = 0.0
         self._consecutive_failures = 0
         self._max_failures = 5  # 5 * 60s = 5 minutes before entities go unavailable
-        self._latest_snapshot: bytes | None = None
 
     async def async_setup(self) -> None:
         """Connect to the vacuum and start the WebSocket listener.
@@ -260,77 +258,6 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
                     self.update_interval = POLL_INTERVAL
 
         return self.client.state
-
-    async def async_take_snapshot(self, count: int = 1) -> None:
-        """Capture one or more snapshots from the robot camera.
-
-        For each photo: sends take_picture command, stores raw bytes,
-        fires state update on the snapshot camera entity, saves to media dir.
-        Burst photos are spaced 1.5s apart.
-
-        Note: Images are AES-encrypted until the APK decryption key is known.
-        Raw bytes are stored as-is for future decoding.
-        """
-        from .camera import NarwalSnapshotCamera
-
-        for i in range(count):
-            raw = await self.client.take_picture()
-            if raw is not None:
-                # TODO: decode encrypted image once AES key is known
-                image_bytes = raw
-                self._latest_snapshot = image_bytes
-                # Update snapshot camera entity if it exists
-                for entity in self._get_snapshot_cameras():
-                    entity.update_snapshot(image_bytes)
-                # Save to media directory
-                await self._save_snapshot(image_bytes)
-            if i < count - 1:
-                await asyncio.sleep(1.5)
-
-    def _get_snapshot_cameras(self):
-        """Yield all NarwalSnapshotCamera entities registered for this coordinator."""
-        from .camera import NarwalSnapshotCamera
-
-        # HA entity registry is not easily accessible here; use coordinator listeners
-        # CoordinatorEntity registers via async_added_to_hass — find through entity_id
-        try:
-            entity_registry = self.hass.data.get("entity_registry")
-            if entity_registry is None:
-                return
-        except Exception:
-            return
-
-        # Walk all entities listening to this coordinator
-        for ref in list(getattr(self, "_listeners", {}).keys()):
-            if isinstance(ref, NarwalSnapshotCamera):
-                yield ref
-
-    async def _save_snapshot(self, image_bytes: bytes) -> None:
-        """Save snapshot to HA media directory with a timestamp filename."""
-        try:
-            media_dirs = getattr(self.hass.config, "media_dirs", None)
-            if not media_dirs:
-                _LOGGER.warning(
-                    "media_dirs not available — snapshot not saved to disk"
-                )
-                return
-            local_dir = media_dirs.get("local", "")
-            if not local_dir:
-                _LOGGER.warning(
-                    "media_dirs['local'] not set — snapshot not saved to disk"
-                )
-                return
-            media_dir = Path(local_dir) / "narwal" / "snapshots"
-            await self.hass.async_add_executor_job(
-                lambda: media_dir.mkdir(parents=True, exist_ok=True)
-            )
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"narwal_{ts}.jpg"
-            filepath = media_dir / filename
-            await self.hass.async_add_executor_job(filepath.write_bytes, image_bytes)
-            _LOGGER.info("Snapshot saved: %s", filepath)
-        except Exception:
-            _LOGGER.exception("Failed to save snapshot to media directory")
 
     async def async_shutdown(self) -> None:
         """Disconnect from the vacuum."""

@@ -55,16 +55,6 @@
       "charging": {
         "name": "Charging"
       }
-    },
-    "button": {
-      "take_photo": {
-        "name": "Take Photo"
-      }
-    },
-    "switch": {
-      "camera_light": {
-        "name": "Camera Light"
-      }
     }
   }
 }
