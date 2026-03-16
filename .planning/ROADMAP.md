@@ -5,7 +5,7 @@
 - ✅ **v0.5 Map Validation & Polish** — Phases 0-8 (shipped 2026-03-08)
 - 📋 **Phase 9: Room-Specific Cleaning** — HA 2026.3 clean_area support
 - 📋 **Phase 10: Obstacle Mapping** — Furniture/object detection on map
-- 📋 **Phase 11: Vision Obstacles** — Transient camera-detected obstacles during cleaning
+- 🗃️ **Phase 11: Vision Obstacles** — ARCHIVED (raw AI stream unusable for map overlay)
 - 📋 **Phase 12: Camera & Patrol** — Snapshot capture, patrol/cruise, LED control, live feed RE
 
 ## Phases
@@ -56,33 +56,38 @@ Plans:
 
 **Research**: See 10-RESEARCH.md — obstacle data is LOCAL in field 2.32 (not cloud-only as previously assumed)
 
-### 📋 Phase 11: Vision Obstacles
+### 🗃️ Phase 11: Vision Obstacles — ARCHIVED
 
-**Goal**: Display transient camera-detected obstacles (pet waste, cables, shoes, clothing, etc.) on the map during and after cleaning runs
-**Depends on**: Phase 10 (obstacle rendering infrastructure)
-**Success Criteria**:
-  1. Vision obstacle positions retrieved from robot during/after cleaning via `get_vision_image` or `display_map`
-  2. Transient obstacles render on map with vision obstacle type labels (42-type enum from APK)
-  3. Vision obstacles distinguished from persistent furniture annotations
-**Requirements:** [VIS-01, VIS-02, VIS-03]
-**Plans:** 2 plans
+**Goal**: Display transient camera-detected obstacles on the map during cleaning
+**Outcome**: ARCHIVED — Feature built, tested live, and removed. display_map field 9/12 provides raw AI detection candidates (every object the camera tentatively identifies), not confirmed objects. The confirmed/filtered set shown in the Narwal app is not accessible via the local WebSocket API.
+**Plans:** 2 plans (executed, then reverted)
 
 Plans:
-- [x] 11-01-PLAN.md — Probe script + live data capture during cleaning (checkpoint)
+- [x] 11-01-PLAN.md — Probe script + live data capture during cleaning
 - [x] 11-02-PLAN.md — VisionObstacleInfo model, parsing, overlay rendering, tests, sync
+- Removal commit: 21bbdea
 
-**Research**: See 11-RESEARCH.md — APK schema confirmed (MapVisionInfo, MapVisionBox, 42-type enum). Data source needs live probing during clean.
+**Key findings**:
+- Field 9: raw AI detection stream (3-6x more detections than app shows)
+- Detection positions drift with robot (trail endpoints, not fixed positions)
+- `get_vision_image` returns NOT_APPLICABLE during cleaning
+- Feature recoverable from git history if confirmed data source found later
 
 ### 📋 Phase 12: Camera & Patrol
 
-**Goal**: Local camera snapshot capture, patrol/cruise mode, and LED control for security/pet-sitting automation
-**Depends on**: Phase 0 (protocol knowledge)
+**Goal**: On-demand camera snapshot capture and LED fill light control via local WebSocket API, providing building blocks for "motion detected -> robot goes to room -> takes photos" automation
+**Depends on**: Phase 0 (protocol knowledge), Phase 9 (room navigation)
 **Success Criteria**:
   1. Take a photo via `/developer/take_picture` and retrieve the image
   2. Control camera LED via `/developer/led_control` for low-light scenarios
-  3. HA automation: presence detection → send robot to room → capture photo → notify
-  4. Patrol/cruise mode: navigate room waypoints capturing photos (`/video_cruise_record`, `/cruise_image_preview`)
-**Plans**: TBD (needs probing of camera topics first)
+  3. Button entity + custom service for snapshot trigger (single + burst mode)
+  4. Snapshot camera entity displays latest capture; images saved to HA media directory
+**Requirements:** [CAM-01, CAM-02, CAM-03]
+**Plans:** 2 plans
+
+Plans:
+- [ ] 12-01-PLAN.md — Client commands + button/switch/snapshot camera entities + service + tests
+- [ ] 12-02-PLAN.md — Live probe of LED control + snapshot format analysis + physical verification
 
 **Known local topics (from APK)**:
 - `/developer/take_picture` — snapshot capture
@@ -106,4 +111,5 @@ Plans:
 | 0-8 (v0.5) | Complete | 2026-03-08 |
 | 9. Room-Specific Cleaning | Complete | 2026-03-08 |
 | 10. Obstacle Mapping | Complete | 2026-03-09 |
-| 11. Vision Obstacles | 2/2 | Complete    | 2026-03-15 | 12. Camera & Patrol | Not started (research needed) | - |
+| 11. Vision Obstacles | ARCHIVED | 2026-03-15 |
+| 12. Camera & Patrol | Planned (2 plans) | - |

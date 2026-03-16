@@ -39,10 +39,9 @@ async def async_setup_entry(
     entry: NarwalConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up the Narwal map camera entity."""
+    """Set up the Narwal camera entities."""
     coordinator = entry.runtime_data
-    entity = NarwalMapCamera(coordinator)
-    async_add_entities([entity])
+    async_add_entities([NarwalMapCamera(coordinator), NarwalSnapshotCamera(coordinator)])
 
 
 class NarwalMapCamera(NarwalEntity, Camera):
@@ -479,3 +478,37 @@ def _render_debug_view(
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+class NarwalSnapshotCamera(NarwalEntity, Camera):
+    """Camera entity that shows the latest photo captured by the robot.
+
+    Updated only when a snapshot is explicitly requested (button press or
+    narwal.take_snapshot service call). Never auto-refreshes — privacy-first.
+
+    Note: The robot returns AES-encrypted image data. Until the decryption key
+    is extracted from the APK, snapshots will not display as valid images.
+    Raw bytes are stored as-is for future decoding.
+    """
+
+    _attr_name = "Snapshot"
+    _attr_is_streaming = False
+
+    def __init__(self, coordinator: NarwalCoordinator) -> None:
+        """Initialize the snapshot camera entity."""
+        NarwalEntity.__init__(self, coordinator)
+        Camera.__init__(self)
+        device_id = coordinator.config_entry.data["device_id"]
+        self._attr_unique_id = f"{device_id}_snapshot"
+        self._snapshot_bytes: bytes | None = None
+
+    async def async_camera_image(
+        self, width: int | None = None, height: int | None = None,
+    ) -> bytes | None:
+        """Return the latest snapshot bytes (or None if no snapshot taken yet)."""
+        return self._snapshot_bytes
+
+    def update_snapshot(self, image_bytes: bytes) -> None:
+        """Store new snapshot bytes and notify HA of the state change."""
+        self._snapshot_bytes = image_bytes
+        self.async_write_ha_state()

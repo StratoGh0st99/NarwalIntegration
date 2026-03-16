@@ -43,6 +43,8 @@ from .const import (
     TOPIC_CMD_SET_FAN_LEVEL,
     TOPIC_CMD_SET_MOP_HUMIDITY,
     TOPIC_CMD_START_CLEAN,
+    TOPIC_CMD_TAKE_PICTURE,
+    TOPIC_CMD_SET_LED,
     TOPIC_CMD_WASH_MOP,
     TOPIC_CMD_YELL,
     DEFAULT_TOPIC_PREFIX,
@@ -1149,3 +1151,36 @@ class NarwalClient:
     async def get_all_maps(self) -> CommandResponse:
         """Download all saved/reduced maps."""
         return await self.send_command(TOPIC_CMD_GET_ALL_MAPS, timeout=15.0)
+
+    async def take_picture(self) -> bytes | None:
+        """Capture a photo from the robot's camera.
+
+        Returns raw image bytes from field 2 of the response, or None on failure.
+        Note: the image is AES-encrypted; decoding requires the APK-derived key
+        which is not yet known. Callers receive raw bytes as-is.
+        """
+        try:
+            resp = await self.send_command(TOPIC_CMD_TAKE_PICTURE, timeout=15.0)
+        except Exception:
+            _LOGGER.warning("take_picture command failed")
+            return None
+        if resp.result_code == CommandResult.SUCCESS:
+            return resp.data.get("2")
+        _LOGGER.warning("take_picture returned result_code=%d", resp.result_code)
+        return None
+
+    async def set_led(self, on: bool) -> None:
+        """Turn the camera LED fill light on or off.
+
+        Payload: 0x08 0x01 = on, 0x08 0x00 = off (protobuf field 1, varint).
+        """
+        payload = b"\x08\x01" if on else b"\x08\x00"
+        try:
+            resp = await self.send_command(TOPIC_CMD_SET_LED, payload=payload)
+        except Exception:
+            _LOGGER.warning("set_led(%s) command failed", on)
+            return
+        if resp.result_code not in (CommandResult.SUCCESS, CommandResult.NOT_APPLICABLE):
+            _LOGGER.warning(
+                "set_led(%s) unexpected result_code=%d", on, resp.result_code
+            )

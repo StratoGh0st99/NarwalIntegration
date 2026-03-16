@@ -80,6 +80,10 @@ TOPIC_CMD_GET_CURRENT_TASK = "clean/current_clean_task/get"
 TOPIC_CMD_GET_MAP = "map/get_map"
 TOPIC_CMD_GET_ALL_MAPS = "map/get_all_reduced_maps"
 
+# Camera (developer commands)
+TOPIC_CMD_TAKE_PICTURE = "developer/take_picture"
+TOPIC_CMD_SET_LED = "developer/led_control"
+
 # Wake / Keep-alive (from APK analysis — candidates for waking sleeping robot)
 TOPIC_CMD_ACTIVE_ROBOT = "common/active_robot_publish"  # TopicDuration keepalive
 TOPIC_CMD_APP_HEARTBEAT = "status/app_status_heartbeat"  # periodic app heartbeat
