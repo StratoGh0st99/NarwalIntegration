@@ -1,0 +1,14 @@
+take_snapshot:
+  name: Take Snapshot
+  description: Capture one or more photos from the robot's camera.
+  fields:
+    count:
+      name: Count
+      description: Number of photos to capture in burst mode.
+      default: 1
+      example: 3
+      selector:
+        number:
+          min: 1
+          max: 10
+          mode: box

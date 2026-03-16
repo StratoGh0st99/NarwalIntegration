@@ -51,6 +51,16 @@
           "off": "Non stationné"
         }
       }
+    },
+    "button": {
+      "take_photo": {
+        "name": "Prendre une photo"
+      }
+    },
+    "switch": {
+      "camera_light": {
+        "name": "Lumière caméra"
+      }
     }
   }
 }

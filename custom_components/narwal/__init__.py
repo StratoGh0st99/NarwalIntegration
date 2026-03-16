@@ -5,11 +5,13 @@ from __future__ import annotations
 import logging
 from typing import TypeAlias
 
+import voluptuous as vol
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import CONF_MODEL, CONF_PRODUCT_KEY, PLATFORMS
+from .const import CONF_MODEL, CONF_PRODUCT_KEY, DOMAIN, PLATFORMS
 from .coordinator import NarwalCoordinator
 from .narwal_client import NarwalConnectionError
 
@@ -48,6 +50,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: NarwalConfigEntry) -> bo
         ) from err
 
     entry.runtime_data = coordinator
+
+    # Register take_snapshot service (idempotent — only once per DOMAIN)
+    if not hass.services.has_service(DOMAIN, "take_snapshot"):
+        async def _handle_take_snapshot(call) -> None:
+            count = call.data.get("count", 1)
+            entries = hass.config_entries.async_entries(DOMAIN)
+            if not entries:
+                return
+            coord = entries[0].runtime_data
+            await coord.async_take_snapshot(count=count)
+
+        hass.services.async_register(
+            DOMAIN,
+            "take_snapshot",
+            _handle_take_snapshot,
+            schema=vol.Schema({
+                vol.Optional("count", default=1): vol.All(int, vol.Range(min=1, max=10)),
+            }),
+        )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
