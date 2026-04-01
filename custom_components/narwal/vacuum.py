@@ -240,7 +240,7 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         If rooms have changed (added, removed, or renamed), creates a repair
         issue so the user can update their segment-to-area mappings.
         """
-        last = self.last_seen_segments
+        last = getattr(self, "last_seen_segments", None)
         if last is None:
             return  # No mapping configured yet
         state = self.coordinator.data
