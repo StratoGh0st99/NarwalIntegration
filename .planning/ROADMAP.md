@@ -119,6 +119,9 @@ Plans:
 **Requirements:** [FIX-01, FIX-02, FIX-03]
 **Plans:** TBD
 
+Plans:
+- [x] 13-01-PLAN.md — X10 Pro model support (FIX-02), room clean error logging (FIX-03); FIX-01 pre-committed
+
 Issues:
 - #11 — `last_seen_segments` AttributeError crashes listener (HIGH — breaks Z10 Ultra)
 - #12 — X10 Pro product key confirmed (CNbforyZWI = AX15), needs config flow + naming
@@ -149,5 +152,5 @@ Issues:
 | 10. Obstacle Mapping | Complete | 2026-03-09 |
 | 11. Vision Obstacles | ARCHIVED | 2026-03-15 |
 | 12. Camera & Patrol | In Progress (plan 01 done) | - |
-| 13. Community Fixes & Multi-Model | Planned | - |
+| 13. Community Fixes & Multi-Model | In Progress (plan 01 done) | - |
 | 14. Shortcuts & Presets | Backlog | - |

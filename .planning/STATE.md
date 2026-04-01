@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: unknown
-stopped_at: "Checkpoint 12-02: awaiting physical LED/snapshot verification"
-last_updated: "2026-03-16T02:42:35.577Z"
+stopped_at: Completed 13-01-PLAN.md
+last_updated: "2026-04-01T19:43:49.103Z"
 last_activity: 2026-03-16 — Take Photo button, Camera Light switch, NarwalSnapshotCamera, narwal.take_snapshot service
 progress:
-  total_phases: 8
-  completed_phases: 6
-  total_plans: 12
-  completed_plans: 12
-  percent: 75
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 5
+  percent: 92
 ---
 
 # Project State
@@ -21,15 +21,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-01)
 
 **Core value:** Users can control and monitor their Narwal Flow vacuum entirely locally — start/stop/pause, see status, view a live floor map — without any cloud dependency.
-**Current focus:** Phase 12 Plan 01 COMPLETE — camera snapshot, LED control, burst service
+**Current focus:** Phase 13 Plan 01 COMPLETE — X10 Pro model support, improved room clean error logging
 
 ## Current Position
 
-Phase: 12 of 12 — IN PROGRESS (Camera & Patrol)
-Plan: 01 of ? — Complete (Camera snapshot + LED building blocks)
-Last activity: 2026-03-16 — Take Photo button, Camera Light switch, NarwalSnapshotCamera, narwal.take_snapshot service
+Phase: 13 of 13 — IN PROGRESS (Community Fixes & Multi-model)
+Plan: 01 of ? — Complete (X10 Pro support + room clean logging)
+Last activity: 2026-04-01 — X10 Pro config flow entry, CommandResult named logging with guidance text
 
-Progress: [█████████░] 92% (11/12 plans done)
+Progress: [██████████] 100% (13 plans done)
 
 ## Accumulated Context
 
@@ -88,12 +88,18 @@ Progress: [█████████░] 92% (11/12 plans done)
 - HA test stubs for ButtonEntity/SwitchEntity/Camera use plain class stubs (not MagicMock) to avoid __setattr__ MRO conflicts when entities are instantiated in tests
 - Service registered idempotently via has_service guard in async_setup_entry
 
+### Key Decisions (Phase 13, Plan 01)
+
+- X10 Pro (AX15/CNbforyZWI) inserted before "Other / Auto-detect" to preserve auto as last dropdown entry
+- Room clean warning embeds per-code guidance text (CONFLICT/NOT_APPLICABLE) for actionable debugging without source knowledge
+- FIX-01 (ba53ddb) was pre-committed — plan correctly noted as no-op, not redone
+
 ### Blockers/Concerns
 
 None
 
 ## Session Continuity
 
-Last session: 2026-04-01
-Stopped at: GitHub issue triage complete — 6 responses posted, Phase 13 + 14 added to roadmap, 3 uncommitted files pending commit
-Resume file: .planning/phases/12-camera-patrol/.continue-here.md
+Last session: 2026-04-01T19:43:49.100Z
+Stopped at: Completed 13-01-PLAN.md
+Resume file: None
