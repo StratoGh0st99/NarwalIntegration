@@ -19,7 +19,7 @@ except ImportError:
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .narwal_client import FanLevel, NarwalCommandError, WorkingStatus
+from .narwal_client import CommandResult, FanLevel, NarwalCommandError, WorkingStatus
 
 from . import NarwalConfigEntry
 from .const import FAN_SPEED_LIST, FAN_SPEED_MAP
@@ -217,14 +217,21 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         room_ids = [int(sid) for sid in segment_ids]
         _LOGGER.info("Starting room-specific clean: rooms=%s", room_ids)
         resp = await self.coordinator.client.start_rooms(room_ids)
+        try:
+            result_name = CommandResult(resp.result_code).name
+        except ValueError:
+            result_name = f"UNKNOWN({resp.result_code})"
         _LOGGER.info(
-            "Room clean response: code=%s, success=%s, rooms=%s",
-            resp.result_code, resp.success, room_ids,
+            "Room clean response: %s (code=%s), rooms=%s",
+            result_name, resp.result_code, room_ids,
         )
         if not resp.success:
             _LOGGER.warning(
-                "Room clean did not succeed (code=%s, rooms=%s)",
-                resp.result_code, room_ids,
+                "Room clean failed: %s (code=%s), rooms=%s. "
+                "CONFLICT means robot is busy (cleaning, returning, or docked cycle in progress). "
+                "NOT_APPLICABLE means robot cannot clean right now. "
+                "Try again after the robot is idle on the dock.",
+                result_name, resp.result_code, room_ids,
             )
 
     @callback
