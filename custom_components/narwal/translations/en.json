@@ -42,6 +42,17 @@
           "fully_charged": "Fully Charged",
           "not_charging": "Not Charging"
         }
+      },
+      "dust_bag_health": {
+        "name": "Dust bag health"
+      },
+      "station_activity": {
+        "name": "Station activity",
+        "state": {
+          "idle": "Idle",
+          "mop_washing": "Mop washing",
+          "mop_drying": "Mop drying"
+        }
       }
     },
     "binary_sensor": {

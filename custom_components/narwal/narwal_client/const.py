@@ -169,6 +169,7 @@ class WorkingStatus(IntEnum):
     CLEANING_ALT = 5  # cleaning — observed when robot was physically stuck; may indicate error/stuck state
     DOCKED = 10       # on dock (does NOT reliably indicate charging vs charged)
     CHARGED = 14      # on dock (reported before 100% — use battery_level for charge state)
+    MOP_DRYING = 17   # station is drying the mop (Flow 2, observed live after a clean)
     # PLACEHOLDER: error state value not yet observed live.
     # Trigger a real error (e.g., pick up robot mid-clean) to discover the value.
     ERROR = 99

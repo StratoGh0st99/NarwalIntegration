@@ -523,6 +523,14 @@ class NarwalState:
     fan_level_raw: int = 0
     mop_humidity_raw: int = 0
 
+    # Station / consumables. Field 41 is broadcast as a percentage that
+    # tracks dust-bag remaining capacity (100 = healthy/empty bag, drops
+    # toward 0 as it fills). Validated against the app's "Dust bag:
+    # Healthy" indicator at 100. Other tank/solution levels (clean
+    # water, dirty water, cleaning solution, mop pad wear) are not yet
+    # mapped — most appear constant at 1 (=OK) until a fault occurs.
+    dust_bag_health: int = 0
+
     # Device identity
     device_info: DeviceInfo | None = None
 
@@ -710,6 +718,12 @@ class NarwalState:
                 self.mop_humidity_raw = int(decoded["29"])
             except (ValueError, TypeError):
                 self.mop_humidity_raw = 0
+        # Field 41 = dust bag remaining capacity, 0–100.
+        if "41" in decoded:
+            try:
+                self.dust_bag_health = int(decoded["41"])
+            except (ValueError, TypeError):
+                self.dust_bag_health = 0
         # Field 47 = dock indicator (3=docked, 2=undocked)
         if "47" in decoded:
             try:
