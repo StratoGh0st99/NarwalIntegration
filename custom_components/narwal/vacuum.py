@@ -60,6 +60,7 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         | VacuumEntityFeature.RETURN_HOME
         | VacuumEntityFeature.FAN_SPEED
         | VacuumEntityFeature.LOCATE
+        | VacuumEntityFeature.SEND_COMMAND
     ) | (VacuumEntityFeature.CLEAN_AREA if Segment is not None else VacuumEntityFeature(0))
     _attr_fan_speed_list = FAN_SPEED_LIST
 
@@ -184,6 +185,33 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         """Locate the vacuum — robot says 'Robot is here'."""
         await self._ensure_awake()
         await self.coordinator.client.locate()
+
+    async def async_send_command(
+        self,
+        command: str,
+        params: dict | list | None = None,
+        **kwargs,
+    ) -> None:
+        """Handle vacuum.send_command service calls.
+
+        Supported commands:
+          - "freo_mind" / "freo_mind_start": start a Freo Mind (AI auto)
+            whole-house clean. Flow 2 only.
+        """
+        if command in ("freo_mind", "freo_mind_start"):
+            await self._ensure_awake()
+            resp = await self.coordinator.client.start_freo_mind()
+            _LOGGER.info(
+                "Freo Mind start: code=%s, success=%s",
+                resp.result_code, resp.success,
+            )
+            if not resp.success:
+                _LOGGER.warning(
+                    "Freo Mind start did not succeed (code=%s)",
+                    resp.result_code,
+                )
+            return
+        _LOGGER.warning("Unknown vacuum command: %s", command)
 
     async def async_set_fan_speed(self, fan_speed: str, **kwargs) -> None:
         """Set the fan speed."""

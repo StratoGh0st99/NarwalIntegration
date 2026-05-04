@@ -914,6 +914,64 @@ class NarwalClient:
             timeout=10.0,
         )
 
+    async def start_freo_mind(self, **kwargs) -> CommandResponse:
+        """Start a Freo Mind (AI auto) whole-house clean.
+
+        Flow 2 only. Reverse-engineered from a live capture of an
+        app-initiated Freo Mind clean (firmware v01.07.19.00):
+
+            {1: {2: {}, 5: {1: {1: 4, 2: 2, 3: 1}, 7: {1: {}}}}}
+
+          field 5.1.1 = mode (4 = Vacuum and mop)
+          field 5.1.2 = mop humidity (2 = Standard)
+          field 5.1.3 = "Freo Mind / AI auto" marker (1)
+          field 5.7   = secondary marker also present in Freo Mind cleans
+        """
+        import blackboxprotobuf
+
+        msg = {
+            "1": {
+                "2": {},
+                "5": {
+                    "1": {"1": 4, "2": 2, "3": 1},
+                    "7": {"1": {}},
+                },
+            }
+        }
+        typedef = {
+            "1": {
+                "type": "message",
+                "message_typedef": {
+                    "2": {"type": "message", "message_typedef": {}},
+                    "5": {
+                        "type": "message",
+                        "message_typedef": {
+                            "1": {
+                                "type": "message",
+                                "message_typedef": {
+                                    "1": {"type": "int"},
+                                    "2": {"type": "int"},
+                                    "3": {"type": "int"},
+                                },
+                            },
+                            "7": {
+                                "type": "message",
+                                "message_typedef": {
+                                    "1": {"type": "message", "message_typedef": {}},
+                                },
+                            },
+                        },
+                    },
+                },
+            }
+        }
+        payload = blackboxprotobuf.encode_message(msg, typedef)
+        return await self.send_command(
+            TOPIC_CMD_START_CLEAN,
+            payload=payload,
+            timeout=10.0,
+        )
+
     def _build_room_clean_payload(self, room_ids: list[int]) -> bytes:
         """Build CleanTask protobuf with per-room clean params in field 1.2.
 
