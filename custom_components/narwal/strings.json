@@ -55,6 +55,16 @@
       "charging": {
         "name": "Charging"
       }
+    },
+    "select": {
+      "mop_humidity": {
+        "name": "Mop humidity",
+        "state": {
+          "slightly_dry": "Slightly dry",
+          "standard": "Standard",
+          "slightly_wet": "Slightly wet"
+        }
+      }
     }
   }
 }
