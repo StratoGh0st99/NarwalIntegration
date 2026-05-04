@@ -100,14 +100,21 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         """Return the current fan speed.
 
         Flow 2 broadcasts the live suction level in robot_base_status
-        field 26 (1-indexed). For Flow 1 the robot does not broadcast it;
-        we fall back to the last value set via the integration.
+        field 26 (1-indexed) but only while a clean task is active;
+        when docked/idle the field reverts to a default that doesn't
+        reflect the user's stored preference. So we only trust the
+        broadcast during cleaning, and fall back to the last
+        user-set value otherwise (matches the original behaviour).
         """
         state = self.coordinator.data
-        # Flow 2 1-indexed scale (1=Quiet, 2=Standard, 3=Strong, 4=Super powerful)
-        # mapped onto the existing FAN_SPEED_LIST labels.
         flow2_levels = {1: "quiet", 2: "normal", 3: "strong", 4: "max"}
-        if state is not None and state.fan_level_raw in flow2_levels:
+        if (
+            state is not None
+            and state.working_status in (
+                WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
+            )
+            and state.fan_level_raw in flow2_levels
+        ):
             return flow2_levels[state.fan_level_raw]
         return self._last_fan_speed
 
