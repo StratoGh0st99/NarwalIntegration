@@ -18,17 +18,67 @@ class DeviceInfo:
     firmware_version: str = ""
 
 
+# ROOM_TYPE enum → display name (Flow 1 / AX12, from APK libapp.so strings).
+_FLOW1_ROOM_TYPE_NAMES: dict[int, str] = {
+    0: "Room",
+    1: "Primary Bedroom",
+    2: "Secondary Bedroom",
+    3: "Living Room",
+    4: "Kitchen",
+    5: "Study",
+    6: "Bathroom",
+    7: "Dining Room",
+    8: "Corridor",
+    9: "Balcony",
+    10: "Utility Room",
+    11: "Cloak Room",
+    12: "Nursery",
+    13: "Recreation Room",
+    14: "Shower Room",
+    15: "Other",
+}
+
+# Flow 2 reorders the ROOM_TYPE enum vs Flow 1. Confirmed via live capture
+# (firmware v01.07.19.00, product_key QxMSPG6VSO) by walking every type in
+# the Narwal app's room-type picker. Only deltas are listed; sub_types not
+# present here use the Flow 1 name.
+_FLOW2_ROOM_TYPE_OVERRIDES: dict[int, str] = {
+    1: "Master Bedroom",
+    5: "Bathroom",
+    6: "Toilet",
+    7: "Balcony",
+    8: "Dining Room",
+    9: "Cloakroom",
+    10: "Corridor",
+    11: "Study",
+    14: "Storage Room",
+}
+
+# product_keys that use the Flow 2 mapping. Add more as community confirms.
+_FLOW2_PRODUCT_KEYS: frozenset[str] = frozenset({"QxMSPG6VSO"})
+
+
+def get_room_type_names(product_key: str | None) -> dict[int, str]:
+    """Return the ROOM_TYPE → display-name mapping for a given device.
+
+    Flow 2 (and possibly other newer models) renamed/reordered the ROOM_TYPE
+    enum. We pick the right base mapping from product_key and fall back to
+    Flow 1 for unknown devices.
+    """
+    base = dict(_FLOW1_ROOM_TYPE_NAMES)
+    if product_key and product_key in _FLOW2_PRODUCT_KEYS:
+        base.update(_FLOW2_ROOM_TYPE_OVERRIDES)
+    return base
+
+
 @dataclass
 class RoomInfo:
     """A room on the map.
 
     Fields from get_map / get_editable_map field 2.12:
       field 1: room_id (matches pixel value >> 8 in map grid)
-      field 2: room_sub_type — ROOM_TYPE enum from APK (0=unspecified,
-               1=main bedroom, 2=secondary room, 3=living room, 4=kitchen,
-               5=study, 6=bathroom, 7=dining room, 8=corridor, 9=balcony,
-               10=utility room, 11=cloak room, 12=nursery, 13=recreation,
-               14=shower room, 15=other)
+      field 2: room_sub_type — ROOM_TYPE enum from APK. The string mapping
+               differs between Flow 1 and Flow 2 (see get_room_type_names).
       field 3: user-assigned name (UTF-8, empty if not named by user)
       field 4: category (1=room, 2=utility/small space)
       field 8: instance_index (1-based, for numbering duplicates: Bathroom 1, 2, 3...)
@@ -40,29 +90,13 @@ class RoomInfo:
     category: int = 0  # 1=room, 2=utility (field 4)
     instance_index: int = 0  # numbering for duplicates (field 8)
 
-    # ROOM_TYPE enum → default display name (from APK libapp.so string analysis)
+    # ROOM_TYPE enum → default display name. Set by MapData.from_response
+    # based on the connected device's product_key; defaults to Flow 1 names.
     ROOM_TYPE_NAMES: dict[int, str] = field(default=None, repr=False)
 
     def __post_init__(self):
         if self.ROOM_TYPE_NAMES is None:
-            object.__setattr__(self, "ROOM_TYPE_NAMES", {
-                0: "Room",
-                1: "Primary Bedroom",
-                2: "Secondary Bedroom",
-                3: "Living Room",
-                4: "Kitchen",
-                5: "Study",
-                6: "Bathroom",
-                7: "Dining Room",
-                8: "Corridor",
-                9: "Balcony",
-                10: "Utility Room",
-                11: "Cloak Room",
-                12: "Nursery",
-                13: "Recreation Room",
-                14: "Shower Room",
-                15: "Other",
-            })
+            object.__setattr__(self, "ROOM_TYPE_NAMES", dict(_FLOW1_ROOM_TYPE_NAMES))
 
     @property
     def display_name(self) -> str:
@@ -238,11 +272,21 @@ class MapData:
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_response(cls, decoded: dict[str, Any]) -> MapData:
-        """Parse map data from a get_map field5 response."""
+    def from_response(
+        cls, decoded: dict[str, Any], product_key: str | None = None,
+    ) -> MapData:
+        """Parse map data from a get_map field5 response.
+
+        Args:
+            decoded: bbp-decoded map response payload.
+            product_key: Connected device's product_key. Selects the
+                ROOM_TYPE → display-name mapping (Flow 1 vs Flow 2).
+        """
         payload = decoded.get("2", {})
         if not payload:
             return cls()
+
+        type_names = get_room_type_names(product_key)
 
         rooms = []
         room_list = payload.get("12", [])
@@ -266,6 +310,7 @@ class MapData:
                     room_sub_type=int(room.get("2", 0)),
                     category=int(room.get("4", 0)),
                     instance_index=int(room.get("8", 0)),
+                    ROOM_TYPE_NAMES=type_names,
                 ))
 
         compressed = payload.get("17", b"")
