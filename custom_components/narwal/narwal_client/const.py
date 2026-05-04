@@ -164,6 +164,7 @@ class WorkingStatus(IntEnum):
 
     UNKNOWN = 0
     STANDBY = 1       # idle / transition state
+    MOP_WASHING = 3   # robot is washing the mop on the station (Flow 2, observed live)
     CLEANING = 4      # active cleaning (stays 4 even while returning to dock)
     CLEANING_ALT = 5  # cleaning — observed when robot was physically stuck; may indicate error/stuck state
     DOCKED = 10       # on dock (does NOT reliably indicate charging vs charged)

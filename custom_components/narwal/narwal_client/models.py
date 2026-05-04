@@ -516,6 +516,13 @@ class NarwalState:
     firmware_version: str = ""
     firmware_target: str = ""
 
+    # Current clean settings (Flow 2 — live-broadcast in robot_base_status).
+    # 0 means "not yet observed" (the robot uses 1-indexed values).
+    #   field 26 = suction (1=Quiet, 2=Standard, 3=Strong, 4=Super powerful)
+    #   field 29 = mop humidity (1=Slightly dry, 2=Standard, 3=Slightly wet)
+    fan_level_raw: int = 0
+    mop_humidity_raw: int = 0
+
     # Device identity
     device_info: DeviceInfo | None = None
 
@@ -687,6 +694,22 @@ class NarwalState:
                 self.dock_field11 = int(decoded["11"])
             except (ValueError, TypeError):
                 self.dock_field11 = 0
+        # Field 26 = current suction level (Flow 2 only; live captures from
+        # firmware v01.07.19.00 confirm the 1-indexed scale 1=Quiet,
+        # 2=Standard, 3=Strong, 4=Super powerful). Not observed on Flow 1
+        # — leaves fan_level_raw at 0 there.
+        if "26" in decoded:
+            try:
+                self.fan_level_raw = int(decoded["26"])
+            except (ValueError, TypeError):
+                self.fan_level_raw = 0
+        # Field 29 = current mop humidity (Flow 2). 1=Slightly dry,
+        # 2=Standard, 3=Slightly wet (live-confirmed).
+        if "29" in decoded:
+            try:
+                self.mop_humidity_raw = int(decoded["29"])
+            except (ValueError, TypeError):
+                self.mop_humidity_raw = 0
         # Field 47 = dock indicator (3=docked, 2=undocked)
         if "47" in decoded:
             try:

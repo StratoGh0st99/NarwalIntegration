@@ -99,10 +99,16 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
     def fan_speed(self) -> str | None:
         """Return the current fan speed.
 
-        The robot protocol does not broadcast the active fan speed setting,
-        so we track the last value set via the integration. Returns None
-        until the user sets a fan speed for the first time.
+        Flow 2 broadcasts the live suction level in robot_base_status
+        field 26 (1-indexed). For Flow 1 the robot does not broadcast it;
+        we fall back to the last value set via the integration.
         """
+        state = self.coordinator.data
+        # Flow 2 1-indexed scale (1=Quiet, 2=Standard, 3=Strong, 4=Super powerful)
+        # mapped onto the existing FAN_SPEED_LIST labels.
+        flow2_levels = {1: "quiet", 2: "normal", 3: "strong", 4: "max"}
+        if state is not None and state.fan_level_raw in flow2_levels:
+            return flow2_levels[state.fan_level_raw]
         return self._last_fan_speed
 
     # Timeout for action commands (start/stop/return) — robot may need
