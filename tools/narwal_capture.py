@@ -518,10 +518,11 @@ def _tui_record(args: argparse.Namespace) -> int:
     def tui_main(stdscr: "curses.window") -> None:
         nonlocal last_change_label
         curses.curs_set(1)
-        # Short timeout = responsive keystrokes. We don't redraw on every
-        # tick, only when state or input changed, so the loop can run
-        # tight without burning CPU.
-        stdscr.timeout(15)
+        stdscr.keypad(True)
+        # Tight input polling — characters are processed the moment
+        # they arrive. We avoid burning the GPU on iTerm2 by only
+        # calling refresh() when something visible actually changed.
+        stdscr.timeout(20)
 
         # Header noting the session start.
         with out_path.open("a") as out_fp:
@@ -537,10 +538,11 @@ def _tui_record(args: argparse.Namespace) -> int:
             t.start()
 
             input_buf = ""
-            dirty = True  # force initial draw
+            table_dirty = True   # state changed → full table redraw needed
+            input_dirty = True   # input line needs repaint
             while not stop.is_set():
                 # Drain any queued broadcasts. Each one that actually
-                # mutates state flips the dirty flag.
+                # mutates state flips the table_dirty flag.
                 while True:
                     try:
                         topic, log_ts, payload = msg_q.get_nowait()
@@ -552,18 +554,18 @@ def _tui_record(args: argparse.Namespace) -> int:
                             d = _diff_dict(prev, payload, _NOISE_BASE_KEYS)
                             if d:
                                 last_change_label = f"[{log_ts}] base: " + ", ".join(d[:3])
-                                dirty = True
+                                table_dirty = True
                         elif topic == "status/working_status":
                             d = _diff_dict(prev, payload, _NOISE_WS_KEYS)
                             if d:
                                 last_change_label = f"[{log_ts}] ws: " + ", ".join(d[:3])
-                                dirty = True
+                                table_dirty = True
                         if prev != payload:
-                            dirty = True
+                            table_dirty = True
                         last_payloads[topic] = payload
                         latest[topic] = payload
 
-                if dirty:
+                if table_dirty:
                     stdscr.erase()
                     h, w = stdscr.getmaxyx()
                     title = (
@@ -602,17 +604,18 @@ def _tui_record(args: argparse.Namespace) -> int:
                     # Last notable change line.
                     stdscr.addstr(h - 3, 0, ("Δ " + last_change_label)[:w-1], curses.A_DIM)
                     stdscr.addstr(h - 2, 0, "─" * (w - 1))
-                    dirty = False
+                    table_dirty = False
+                    input_dirty = True  # erase wiped the input line too
 
-                # Always repaint just the input line — cheaper than a
-                # full erase and keeps typing instant.
-                h, w = stdscr.getmaxyx()
-                prompt = f"> {input_buf}"
-                stdscr.move(h - 1, 0)
-                stdscr.clrtoeol()
-                stdscr.addstr(h - 1, 0, prompt[:w-1])
-                stdscr.move(h - 1, min(len(prompt), w - 1))
-                stdscr.refresh()
+                if input_dirty:
+                    h, w = stdscr.getmaxyx()
+                    prompt = f"> {input_buf}"
+                    stdscr.move(h - 1, 0)
+                    stdscr.clrtoeol()
+                    stdscr.addstr(h - 1, 0, prompt[:w-1])
+                    stdscr.move(h - 1, min(len(prompt), w - 1))
+                    stdscr.refresh()
+                    input_dirty = False
 
                 # Poll keypress.
                 ch = stdscr.getch()
@@ -623,6 +626,7 @@ def _tui_record(args: argparse.Namespace) -> int:
                 if ch in (10, 13):  # Enter
                     text = input_buf.strip()
                     input_buf = ""
+                    input_dirty = True
                     if not text:
                         continue
                     out_fp.write(json.dumps({
@@ -632,9 +636,12 @@ def _tui_record(args: argparse.Namespace) -> int:
                     }) + "\n")
                     out_fp.flush()
                 elif ch in (curses.KEY_BACKSPACE, 127, 8):
-                    input_buf = input_buf[:-1]
+                    if input_buf:
+                        input_buf = input_buf[:-1]
+                        input_dirty = True
                 elif 32 <= ch < 127:
                     input_buf += chr(ch)
+                    input_dirty = True
 
         stop.set()
 
