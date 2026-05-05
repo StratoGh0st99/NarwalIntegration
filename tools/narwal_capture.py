@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record annotated Narwal broadcasts for protocol reverse-engineering.
+"""Record + watch annotated Narwal broadcasts for protocol RE.
 
 Streams `ha core logs --follow` from a Home Assistant host over SSH,
 filters for `DUMP <topic>: <decoded>` lines emitted by the integration
@@ -7,18 +7,19 @@ when run with debug logging, and interleaves user-typed annotations
 into the output. Captures land in JSONL so they're trivially diffable
 and replayable.
 
-Usage:
-    # Stream + annotate (Ctrl+C to stop)
+Two complementary subcommands, made to run in two separate terminals:
+
+    # Terminal A — annotations + capture (low-latency typing)
     python3 narwal_capture.py record --host root@192.168.178.3 \
-        --out captures/baseline.jsonl
+        --out captures/session.jsonl
 
-    # Diff two captures, listing fields that changed in
-    # robot_base_status / working_status broadcasts
-    python3 narwal_capture.py diff captures/baseline.jsonl \
-        captures/after-toggle.jsonl
+    # Terminal B — live decoded-state dashboard
+    python3 narwal_capture.py dashboard --host root@192.168.178.3
 
-    # Pretty-print a recorded timeline
-    python3 narwal_capture.py replay captures/baseline.jsonl
+Plus offline analysis helpers:
+
+    python3 narwal_capture.py diff captures/before.jsonl captures/after.jsonl
+    python3 narwal_capture.py replay captures/session.jsonl
 
 The integration must already be running with debug logging:
     service: logger.set_level
@@ -26,9 +27,9 @@ The integration must already be running with debug logging:
       custom_components.narwal: debug
       custom_components.narwal.narwal_client: debug
 
-This works because the (debug-branch / shipped) client logs every
-decoded broadcast as `DUMP <topic>: <repr>` at DEBUG level, which
-ha core logs --follow streams over the supervisor API.
+This works because the client logs every decoded broadcast as
+`DUMP <topic>: <repr>` at DEBUG level, which `ha core logs --follow`
+streams over the supervisor API.
 """
 
 from __future__ import annotations
@@ -148,7 +149,6 @@ def _diff_dict(
 def _writer_thread(
     host: str, out_fp: TextIO, lock: threading.Lock,
     stop: threading.Event, verbose: bool, counter: list[int],
-    notable_only: bool,
 ) -> None:
     """Read SSH log stream, write parsed DUMP lines to the JSONL output."""
     last_payload: dict[str, dict[str, Any]] = {}
@@ -214,11 +214,6 @@ def _writer_thread(
                     "diff": notable_diff,
                 }) + "\n")
                 out_fp.flush()
-        # notable_only currently doesn't drop broadcasts from the
-        # JSONL; it's reserved for a future flag if the captures get
-        # too big to keep raw. Plumbed through now so callers don't
-        # break.
-        _ = notable_only
 
 
 # --- Decoder for known protocol fields ---------------------------------
@@ -473,197 +468,82 @@ def _unknown_keys(
     return out
 
 
-# --- TUI ---------------------------------------------------------------
 
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    """Live decoded-state dashboard (view only, no input handling).
 
-def _tui_record(args: argparse.Namespace) -> int:
-    """Curses TUI: live decoded state table + annotation prompt."""
-    import curses
-    import locale
-    import queue as _q
-
-    locale.setlocale(locale.LC_ALL, "")
-
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    stop = threading.Event()
-    counter = [0]
-    msg_q: _q.Queue = _q.Queue()
+    Streams `ha core logs --follow` over SSH, decodes each broadcast,
+    and redraws an ANSI table on every state change. View-only: the
+    `record` subcommand handles annotations in a separate terminal,
+    which keeps typing latency-free regardless of how busy the dock is.
+    """
     latest: dict[str, dict[str, Any]] = {}
-    last_change_label = "—"
     last_payloads: dict[str, dict[str, Any]] = {}
-
-    def worker(out_fp: TextIO) -> None:
+    last_change_label = "—"
+    counter = 0
+    # Hide the cursor while the dashboard is running.
+    sys.stdout.write("\033[?25l")
+    sys.stdout.flush()
+    try:
         for line in _iter_log_stream(args.host):
-            if stop.is_set():
-                break
             m = DUMP_RE.match(line)
             if not m:
                 continue
             topic = m.group("topic")
             log_ts = m.group("ts")
             payload = _parse_payload(m.group("payload"))
-            # persist every broadcast
-            out_fp.write(json.dumps({
-                "kind": "broadcast",
-                "ts": _now_iso(),
-                "log_ts": log_ts,
-                "topic": topic,
-                "payload": payload,
-            }, default=str) + "\n")
-            out_fp.flush()
-            counter[0] += 1
-            msg_q.put((topic, log_ts, payload))
+            counter += 1
 
-    def tui_main(stdscr: "curses.window") -> None:
-        nonlocal last_change_label
-        curses.curs_set(1)
-        stdscr.keypad(True)
-        # Tight input polling — characters are processed the moment
-        # they arrive. We avoid burning the GPU on iTerm2 by only
-        # calling refresh() when something visible actually changed.
-        stdscr.timeout(20)
+            changed = False
+            if isinstance(payload, dict):
+                prev = last_payloads.get(topic)
+                if topic == "status/robot_base_status":
+                    d = _diff_dict(prev, payload, _NOISE_BASE_KEYS)
+                    if d:
+                        last_change_label = f"[{log_ts}] base: " + ", ".join(d[:3])
+                        changed = True
+                elif topic == "status/working_status":
+                    d = _diff_dict(prev, payload, _NOISE_WS_KEYS)
+                    if d:
+                        last_change_label = f"[{log_ts}] ws: " + ", ".join(d[:3])
+                        changed = True
+                if prev != payload:
+                    changed = True
+                last_payloads[topic] = payload
+                latest[topic] = payload
 
-        # Header noting the session start.
-        with out_path.open("a") as out_fp:
-            out_fp.write(json.dumps({
-                "kind": "session_start",
-                "ts": _now_iso(),
-                "host": args.host,
-                "mode": "tui",
-            }) + "\n")
-            out_fp.flush()
+            if not changed:
+                continue
 
-            t = threading.Thread(target=worker, args=(out_fp,), daemon=True)
-            t.start()
-
-            input_buf = ""
-            table_dirty = True   # state changed → full table redraw needed
-            input_dirty = True   # input line needs repaint
-            while not stop.is_set():
-                # Drain any queued broadcasts. Each one that actually
-                # mutates state flips the table_dirty flag.
-                while True:
-                    try:
-                        topic, log_ts, payload = msg_q.get_nowait()
-                    except _q.Empty:
-                        break
-                    if isinstance(payload, dict):
-                        prev = last_payloads.get(topic)
-                        if topic == "status/robot_base_status":
-                            d = _diff_dict(prev, payload, _NOISE_BASE_KEYS)
-                            if d:
-                                last_change_label = f"[{log_ts}] base: " + ", ".join(d[:3])
-                                table_dirty = True
-                        elif topic == "status/working_status":
-                            d = _diff_dict(prev, payload, _NOISE_WS_KEYS)
-                            if d:
-                                last_change_label = f"[{log_ts}] ws: " + ", ".join(d[:3])
-                                table_dirty = True
-                        if prev != payload:
-                            table_dirty = True
-                        last_payloads[topic] = payload
-                        latest[topic] = payload
-
-                if table_dirty:
-                    stdscr.erase()
-                    h, w = stdscr.getmaxyx()
-                    title = (
-                        f"narwal-capture · host={args.host} · "
-                        f"broadcasts={counter[0]} · {out_path.name}"
-                    )
-                    stdscr.addstr(0, 0, title[:w-1], curses.A_BOLD)
-                    stdscr.addstr(1, 0, "─" * (w - 1))
-
-                    row = 2
-                    consumed_base: set[str] = set()
-                    consumed_ws: set[str] = set()
-                    rows = _decode_state(latest, consumed_base, consumed_ws)
-                    for label, value, raw in rows:
-                        if row >= h - 4:
-                            break
-                        line_str = f"  {label:<16} {value:<48} {raw}"
-                        stdscr.addstr(row, 0, line_str[:w-1])
-                        row += 1
-
-                    # Raw / undecoded section — every base/ws key the
-                    # decoder didn't consume.
-                    row += 1
-                    if row < h - 4:
-                        stdscr.addstr(row, 0, "  Raw / undecoded fields:", curses.A_DIM)
-                        row += 1
-                        for topic, key, repr_val in _unknown_keys(
-                            latest, consumed_base, consumed_ws,
-                        ):
-                            if row >= h - 4:
-                                break
-                            s = f"    {topic}.{key:<6} = {repr_val}"
-                            stdscr.addstr(row, 0, s[:w-1], curses.A_DIM)
-                            row += 1
-
-                    # Last notable change line.
-                    stdscr.addstr(h - 3, 0, ("Δ " + last_change_label)[:w-1], curses.A_DIM)
-                    stdscr.addstr(h - 2, 0, "─" * (w - 1))
-                    table_dirty = False
-                    input_dirty = True  # erase wiped the input line too
-
-                if input_dirty:
-                    h, w = stdscr.getmaxyx()
-                    prompt = f"> {input_buf}"
-                    stdscr.move(h - 1, 0)
-                    stdscr.clrtoeol()
-                    stdscr.addstr(h - 1, 0, prompt[:w-1])
-                    stdscr.move(h - 1, min(len(prompt), w - 1))
-                    stdscr.refresh()
-                    input_dirty = False
-
-                # Poll keypress.
-                ch = stdscr.getch()
-                if ch == -1:
-                    continue
-                if ch in (3, 4, 27):  # Ctrl-C / Ctrl-D / ESC
-                    break
-                if ch in (10, 13):  # Enter
-                    text = input_buf.strip()
-                    input_buf = ""
-                    input_dirty = True
-                    if not text:
-                        continue
-                    out_fp.write(json.dumps({
-                        "kind": "annotation",
-                        "ts": _now_iso(),
-                        "text": text,
-                    }) + "\n")
-                    out_fp.flush()
-                elif ch in (curses.KEY_BACKSPACE, 127, 8):
-                    if input_buf:
-                        input_buf = input_buf[:-1]
-                        input_dirty = True
-                elif 32 <= ch < 127:
-                    input_buf += chr(ch)
-                    input_dirty = True
-
-        stop.set()
-
-    try:
-        curses.wrapper(tui_main)
+            # Clear screen + move cursor home, then redraw.
+            out = ["\033[2J\033[H"]
+            out.append(f"narwal-dashboard · host={args.host} · broadcasts={counter}\n")
+            out.append("─" * 78 + "\n")
+            consumed_b: set[str] = set()
+            consumed_w: set[str] = set()
+            for label, value, raw in _decode_state(latest, consumed_b, consumed_w):
+                out.append(f"  {label:<16} {value:<48} [{raw}]\n")
+            out.append("\n  Raw / undecoded fields:\n")
+            for src, key, val in _unknown_keys(latest, consumed_b, consumed_w):
+                out.append(f"    {src}.{key:<6} = {val}\n")
+            out.append("\nΔ " + last_change_label + "\n")
+            sys.stdout.write("".join(out))
+            sys.stdout.flush()
+    except KeyboardInterrupt:
+        pass
     finally:
-        stop.set()
-        print(f"\nStopped after {counter[0]} broadcasts. Capture: {out_path}",
-              file=sys.stderr)
+        sys.stdout.write("\033[?25h\n")
+        sys.stdout.flush()
     return 0
 
 
 def cmd_record(args: argparse.Namespace) -> int:
     """Stream + annotate.
 
-    Default mode is the curses TUI dashboard (decoded state table +
-    annotation prompt). --simple falls back to the line-oriented mode
-    (annotations on stdin, broadcasts written to JSONL only).
+    Records every broadcast to JSONL while the user types annotations
+    at a `> ` prompt. Pair with the `dashboard` subcommand in another
+    terminal to watch the decoded state live without affecting input.
     """
-    if not args.simple:
-        return _tui_record(args)
-
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     lock = threading.Lock()
@@ -688,7 +568,7 @@ def cmd_record(args: argparse.Namespace) -> int:
 
         worker = threading.Thread(
             target=_writer_thread,
-            args=(args.host, out_fp, lock, stop, args.verbose, counter, False),
+            args=(args.host, out_fp, lock, stop, args.verbose, counter),
             daemon=True,
         )
         worker.start()
@@ -819,13 +699,16 @@ def main() -> int:
     rec.add_argument("--out", required=True, help="JSONL output path")
     rec.add_argument(
         "--verbose", "-v", action="store_true",
-        help="(simple mode only) echo each broadcast on stderr",
-    )
-    rec.add_argument(
-        "--simple", action="store_true",
-        help="line-oriented mode (no curses TUI). Useful in CI / dumb terminals.",
+        help="echo each broadcast on stderr (clutters the input prompt)",
     )
     rec.set_defaults(func=cmd_record)
+
+    dash = sub.add_parser(
+        "dashboard",
+        help="live decoded-state view (run in a separate terminal alongside `record`)",
+    )
+    dash.add_argument("--host", required=True, help="ssh target, e.g. root@192.168.178.3")
+    dash.set_defaults(func=cmd_dashboard)
 
     diff = sub.add_parser("diff", help="diff latest broadcast per topic between two captures")
     diff.add_argument("left")
