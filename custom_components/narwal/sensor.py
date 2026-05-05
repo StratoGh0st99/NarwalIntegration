@@ -43,12 +43,15 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         translation_key="cleaning_area",
         native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
         state_class=SensorStateClass.MEASUREMENT,
-        # Flow 2 broadcasts the live area in m² as float32 in ws.2;
-        # field 13 is a constant 18000 there. Fall back to the legacy
-        # cm²-based field for older models that don't populate ws.2.
+        # Flow 2 broadcasts live area as float32 m² in ws.2. Flow 1
+        # puts cm² in ws.13. On Flow 2 ws.13 is a constant 18000 even
+        # when idle, so we must NOT treat it as a real area. Only fall
+        # back to the legacy field while cleaning_time > 0 (set only
+        # during an active clean).
         value_fn=lambda state: (
             round(state.cleaning_area_m2, 2) if state.cleaning_area_m2 > 0
-            else round(state.cleaning_area / 10000, 2) if state.cleaning_area > 0
+            else round(state.cleaning_area / 10000, 2)
+            if state.cleaning_area > 0 and state.cleaning_time > 0
             else None
         ),
     ),

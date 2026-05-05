@@ -581,6 +581,13 @@ class NarwalState:
     # rooms still pending.
     rooms_completed: list[int] = field(default_factory=list)
 
+    # Mop-drying timer (Flow 2). Hypothesis from a live mop-drying
+    # session: ws.8 counts elapsed seconds since drying started,
+    # ws.9 is the cycle's total target seconds (≈ 12600 = 3.5h on
+    # stock firmware). Both 0 when drying is not active.
+    mop_drying_elapsed: int = 0
+    mop_drying_target: int = 0
+
     # Map
     map_data: MapData | None = None
     map_display_data: MapDisplayData | None = None
@@ -732,6 +739,15 @@ class NarwalState:
             except (ValueError, TypeError):
                 pass
         self.rooms_completed = completed
+        # Mop-drying timer (Flow 2 hypothesis from live capture).
+        try:
+            self.mop_drying_elapsed = int(decoded.get("8", 0) or 0)
+        except (ValueError, TypeError):
+            self.mop_drying_elapsed = 0
+        try:
+            self.mop_drying_target = int(decoded.get("9", 0) or 0)
+        except (ValueError, TypeError):
+            self.mop_drying_target = 0
         if "15" in decoded:
             # Field 15 may be cumulative time; prefer field 3 for current session
             pass

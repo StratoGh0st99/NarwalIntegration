@@ -480,6 +480,28 @@ def _decode_state(
         rows.append(("Elapsed", f"{ws['3']} s", "ws.3"))
         consumed_ws.add("3")
 
+    # Mop-drying timer (hypothesis): ws.8 = elapsed seconds since
+    # drying started, ws.9 = total target seconds.
+    if "8" in ws or "9" in ws:
+        elapsed = ws.get("8", 0)
+        target = ws.get("9", 0)
+        try:
+            elapsed_i = int(elapsed) if elapsed else 0
+            target_i = int(target) if target else 0
+        except (ValueError, TypeError):
+            elapsed_i = target_i = 0
+        if target_i > 0:
+            pct = (elapsed_i / target_i) * 100
+            rows.append((
+                "Mop drying",
+                f"{elapsed_i//60}:{elapsed_i%60:02} / {target_i//60}:{target_i%60:02} ({pct:.0f}%)",
+                "ws.8 / ws.9",
+            ))
+        elif elapsed_i:
+            rows.append(("Mop drying", f"{elapsed_i//60}:{elapsed_i%60:02} elapsed", "ws.8"))
+        consumed_ws.add("8")
+        consumed_ws.add("9")
+
     return rows
 
 
