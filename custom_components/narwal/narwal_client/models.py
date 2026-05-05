@@ -531,6 +531,17 @@ class NarwalState:
     # mapped — most appear constant at 1 (=OK) until a fault occurs.
     dust_bag_health: int = 0
 
+    # Active fault / error. The robot reports a structured error in
+    # robot_base_status field 48.1.2 — empty `{}` when there is no
+    # active error, or `{1: severity, 2: code, 3: localized_message}`
+    # when a fault halts the current task. The message is broadcast in
+    # whatever locale the robot's firmware was set to (Chinese on the
+    # Flow 2 hardware we tested), so consumers should prefer the
+    # numeric code for logic and use the message for display.
+    error_code: int = 0
+    error_severity: int = 0
+    error_message: str = ""
+
     # Device identity
     device_info: DeviceInfo | None = None
 
@@ -724,6 +735,29 @@ class NarwalState:
                 self.dust_bag_health = int(decoded["41"])
             except (ValueError, TypeError):
                 self.dust_bag_health = 0
+        # Field 48.1.2 = active error struct, empty {} when no error.
+        # Live-confirmed via tank-empty fault on Flow 2:
+        #   {1: severity, 2: code, 3: localized_message}
+        # Reset to defaults when error clears or field is absent.
+        err = decoded.get("48", {}).get("1", {}).get("2", None)
+        if isinstance(err, dict) and err:
+            try:
+                self.error_severity = int(err.get("1", 0))
+            except (ValueError, TypeError):
+                self.error_severity = 0
+            try:
+                self.error_code = int(err.get("2", 0))
+            except (ValueError, TypeError):
+                self.error_code = 0
+            raw_msg = err.get("3", "")
+            if isinstance(raw_msg, bytes):
+                self.error_message = raw_msg.decode("utf-8", errors="replace")
+            else:
+                self.error_message = str(raw_msg)
+        else:
+            self.error_code = 0
+            self.error_severity = 0
+            self.error_message = ""
         # Field 47 = dock indicator (3=docked, 2=undocked)
         if "47" in decoded:
             try:

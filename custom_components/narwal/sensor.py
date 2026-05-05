@@ -76,6 +76,25 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         # robot_base_status field 41: 100 = bag healthy/empty, drops as full.
         value_fn=lambda state: state.dust_bag_health or None,
     ),
+    NarwalSensorEntityDescription(
+        key="error_code",
+        translation_key="error_code",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        # 0 = no active error. Codes appear to be packed as
+        # 0xCC SS RR XX (category, subcategory, reserved, specific).
+        # Live-confirmed example: 16842807 (0x01010137) = clean-water
+        # tank empty / not installed during mop wash.
+        value_fn=lambda state: state.error_code or None,
+    ),
+    NarwalSensorEntityDescription(
+        key="error_message",
+        translation_key="error_message",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        # Localized message string broadcast alongside the error code.
+        # Locale follows the robot's firmware setting (Chinese on the
+        # Flow 2 we tested) — prefer error_code for automations.
+        value_fn=lambda state: state.error_message or None,
+    ),
 )
 
 

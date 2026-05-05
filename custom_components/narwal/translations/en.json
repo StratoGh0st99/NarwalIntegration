@@ -53,6 +53,12 @@
           "mop_washing": "Mop washing",
           "mop_drying": "Mop drying"
         }
+      },
+      "error_code": {
+        "name": "Error code"
+      },
+      "error_message": {
+        "name": "Error message"
       }
     },
     "binary_sensor": {
@@ -65,6 +71,9 @@
       },
       "charging": {
         "name": "Charging"
+      },
+      "active_error": {
+        "name": "Active error"
       }
     },
     "select": {
