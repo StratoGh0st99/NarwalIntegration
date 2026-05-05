@@ -358,7 +358,12 @@ def cmd_replay(args: argparse.Namespace) -> int:
                 print(f"[session @ {rec['ts']} on {rec.get('host', '?')}]")
             elif kind == "annotation":
                 print(f"\n>>> {rec['ts']} :: {rec['text']}")
-            elif kind == "broadcast":
+            elif kind == "change":
+                ts = rec.get("log_ts", rec.get("ts", "?"))
+                short_topic = rec["topic"].rsplit("/", 1)[-1]
+                hint = ", ".join(rec.get("diff", [])[:6])
+                print(f"  [*] [{ts}] {short_topic}: {hint}")
+            elif kind == "broadcast" and args.full:
                 ts = rec.get("log_ts", rec.get("ts", "?"))
                 print(f"  [{ts}] {rec['topic']}: {rec['payload']!r}")
     return 0
@@ -384,6 +389,10 @@ def main() -> int:
 
     replay = sub.add_parser("replay", help="pretty-print a capture timeline")
     replay.add_argument("file")
+    replay.add_argument(
+        "--full", action="store_true",
+        help="include every raw broadcast line (default: annotations + change hints only)",
+    )
     replay.set_defaults(func=cmd_replay)
 
     args = p.parse_args()
