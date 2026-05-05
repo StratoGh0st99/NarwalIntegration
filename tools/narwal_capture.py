@@ -239,15 +239,10 @@ _CLEAN_MODE = {
     4: "Vacuum and mop", 5: "Adaptive (Raumanpassung)",
 }
 
-# Top-level robot_base_status fields we know enough about to label.
-_KNOWN_BASE_KEYS: frozenset[str] = frozenset({
-    "1", "2", "3", "5", "11", "12", "13", "14", "15", "16", "18",
-    "20", "23", "24", "25", "26", "28", "29", "30", "32", "34", "35",
-    "36", "38", "39", "40", "41", "44", "47", "48", "49", "50",
-})
-_KNOWN_WS_KEYS: frozenset[str] = frozenset({
-    "3", "5", "6", "13", "15", "18", "19", "22",
-})
+# Decoded keys are tracked dynamically by _decode_state — anything it
+# consumes is excluded from the "Unknown fields" section. This keeps
+# the dashboard honest: if a row appears decoded above, the raw key
+# disappears from the bottom; new firmware fields show up immediately.
 
 
 def _f32(val: Any) -> float | None:
@@ -273,17 +268,29 @@ def _f48_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def _decode_state(latest: dict[str, dict[str, Any]]) -> list[tuple[str, str, str]]:
+def _decode_state(
+    latest: dict[str, dict[str, Any]],
+    consumed_base: set[str] | None = None,
+    consumed_ws: set[str] | None = None,
+) -> list[tuple[str, str, str]]:
     """Build (label, value, raw_field) rows from the latest broadcasts.
 
-    Only includes fields we understand. Unknown stuff goes through
-    _unknown_keys() so the operator can spot new patterns.
+    Mirrors what `narwal_client` actually pulls out of each broadcast,
+    plus the Flow-2 specific fields we discovered. Anything we touch
+    is added to consumed_{base,ws}; whatever's left is shown as
+    raw/unknown by the caller. That keeps the dashboard honest:
+    a row appearing here means the integration sees the value, not
+    just that we logged the key.
     """
     bs = latest.get("status/robot_base_status") or {}
     ws = latest.get("status/working_status") or {}
+    if consumed_base is None:
+        consumed_base = set()
+    if consumed_ws is None:
+        consumed_ws = set()
     rows: list[tuple[str, str, str]] = []
 
-    # Working status
+    # Working status (3.1)
     f3 = bs.get("3") if isinstance(bs.get("3"), dict) else {}
     ws_id = f3.get("1") if isinstance(f3, dict) else None
     rows.append((
@@ -291,14 +298,22 @@ def _decode_state(latest: dict[str, dict[str, Any]]) -> list[tuple[str, str, str
         f"{_WORKING_STATUS.get(ws_id, '?')} ({ws_id})" if ws_id is not None else "-",
         f"3.1={ws_id}",
     ))
+    consumed_base.add("3")  # the whole nested message is decoded below
 
     # Battery (% from float32 in field 2)
     bat = _f32(bs.get("2"))
     rows.append(("Battery", f"{bat:.1f}%" if bat is not None else "-", "2 (float32)"))
+    consumed_base.add("2")
+
+    # Battery health (38, design capacity — always 100 in observed data)
+    bh = bs.get("38")
+    rows.append(("Battery health", f"{bh}" if bh is not None else "-", "38"))
+    consumed_base.add("38")
 
     # Suction
     s = bs.get("26")
     rows.append(("Suction", f"{_SUCTION.get(s, '?')} ({s})" if s else "-", "26"))
+    consumed_base.add("26")
 
     # Mop humidity
     h = bs.get("29")
@@ -307,10 +322,12 @@ def _decode_state(latest: dict[str, dict[str, Any]]) -> list[tuple[str, str, str
         f"{_MOP_HUMIDITY.get(h, '?')} ({h})" if h else "-",
         "29",
     ))
+    consumed_base.add("29")
 
     # Dust bag
     db = bs.get("41")
     rows.append(("Dust bag", f"{db}%" if db is not None else "-", "41"))
+    consumed_base.add("41")
 
     # Coverage precision (1 = Standard, absent = Meticulous; tentative)
     cp = bs.get("34")
@@ -320,17 +337,34 @@ def _decode_state(latest: dict[str, dict[str, Any]]) -> list[tuple[str, str, str
         rows.append(("Coverage", "Meticulous? (34 absent)", "34=∅"))
     else:
         rows.append(("Coverage", f"unknown (34={cp})", "34"))
+    consumed_base.add("34")
 
-    # Pause / cleaning sub-state
-    paused = isinstance(f3, dict) and f3.get("2") == 1
-    returning = isinstance(f3, dict) and f3.get("7") == 1
-    sub = []
-    if paused:
-        sub.append("paused")
-    if returning:
-        sub.append("returning")
-    rows.append(("Sub-state", ", ".join(sub) or "-",
-                 f"3.2={f3.get('2') if isinstance(f3, dict) else '-'} 3.7={f3.get('7') if isinstance(f3, dict) else '-'}"))
+    # Sub-state from field 3 (paused / returning / dock indicators)
+    if isinstance(f3, dict):
+        paused = f3.get("2") == 1
+        returning = f3.get("7") == 1
+        sub = []
+        if paused:
+            sub.append("paused")
+        if returning:
+            sub.append("returning")
+        rows.append((
+            "Sub-state", ", ".join(sub) or "-",
+            f"3.2={f3.get('2')} 3.7={f3.get('7')}",
+        ))
+        rows.append((
+            "Dock 3.x",
+            f"presence={f3.get('3')} sub={f3.get('10')} activity={f3.get('12')}",
+            "3.3 / 3.10 / 3.12",
+        ))
+
+    # Top-level dock indicators (mirrors of field 3 sub-fields)
+    rows.append((
+        "Dock 11/47",
+        f"f11={bs.get('11')} (2=docked) f47={bs.get('47')} (3=docked)",
+        "11, 47",
+    ))
+    consumed_base.update({"11", "47"})
 
     # Field 48: parse markers + clean-task config + error
     entries = _f48_entries(bs)
@@ -348,7 +382,6 @@ def _decode_state(latest: dict[str, dict[str, Any]]) -> list[tuple[str, str, str
             clean_cfg = e["5"].get("1") if isinstance(e["5"].get("1"), dict) else None
         if "2" in e and isinstance(e.get("2"), dict) and e["2"]:
             err_info = e["2"]
-
     rows.append(("Station markers", ", ".join(markers) or "-", "48.1.*"))
 
     # Active clean task config (when running)
@@ -377,8 +410,20 @@ def _decode_state(latest: dict[str, dict[str, Any]]) -> list[tuple[str, str, str
         ))
     else:
         rows.append(("Error", "none", "48.1.*.2"))
+    consumed_base.add("48")
 
-    # working_status: room queue + current room
+    # Session id (13) + last-update timestamp (36)
+    sid = bs.get("13")
+    if sid is not None:
+        sid_short = str(sid)[:24] + ("…" if len(str(sid)) > 24 else "")
+        rows.append(("Session ID", sid_short, "13"))
+        consumed_base.add("13")
+    ts36 = bs.get("36")
+    if ts36 is not None:
+        rows.append(("Timestamp (ms)", str(ts36), "36"))
+        consumed_base.add("36")
+
+    # working_status: room queue + current room + cleaning telemetry
     wf5 = ws.get("5") if isinstance(ws, dict) else None
     if isinstance(wf5, list):
         rooms = [str(e.get("1")) for e in wf5 if isinstance(e, dict)]
@@ -387,23 +432,42 @@ def _decode_state(latest: dict[str, dict[str, Any]]) -> list[tuple[str, str, str
         rows.append(("Room queue", str(wf5.get("1")), "ws.5"))
     else:
         rows.append(("Room queue", "-", "ws.5"))
+    consumed_ws.add("5")
+
     cur = ws.get("6")
     rows.append(("Current room", str(cur) if cur is not None else "-", "ws.6"))
+    consumed_ws.add("6")
+
+    # Cleaning area (cm² → m²) and elapsed time (seconds)
+    if "13" in ws:
+        try:
+            area_m2 = int(ws["13"]) / 10000
+            rows.append(("Clean area", f"{area_m2:.2f} m²", "ws.13"))
+        except (ValueError, TypeError):
+            pass
+        consumed_ws.add("13")
+    if "3" in ws:
+        rows.append(("Elapsed", f"{ws['3']} s", "ws.3"))
+        consumed_ws.add("3")
 
     return rows
 
 
-def _unknown_keys(latest: dict[str, dict[str, Any]]) -> list[tuple[str, str, str]]:
-    """Return (topic, key, raw repr) for fields we don't decode yet."""
+def _unknown_keys(
+    latest: dict[str, dict[str, Any]],
+    consumed_base: set[str],
+    consumed_ws: set[str],
+) -> list[tuple[str, str, str]]:
+    """Return (topic, key, raw repr) for fields not consumed by the decoder."""
     out: list[tuple[str, str, str]] = []
     bs = latest.get("status/robot_base_status") or {}
     for k in sorted(bs.keys(), key=lambda x: int(x) if x.isdigit() else 999):
-        if k in _KNOWN_BASE_KEYS:
+        if k in consumed_base:
             continue
         out.append(("base", k, repr(bs[k])[:60]))
     ws = latest.get("status/working_status") or {}
     for k in sorted(ws.keys(), key=lambda x: int(x) if x.isdigit() else 999):
-        if k in _KNOWN_WS_KEYS:
+        if k in consumed_ws:
             continue
         out.append(("working", k, repr(ws[k])[:60]))
     return out
@@ -501,7 +565,9 @@ def _tui_record(args: argparse.Namespace) -> int:
                 stdscr.addstr(1, 0, "─" * (w - 1))
 
                 row = 2
-                rows = _decode_state(latest)
+                consumed_base: set[str] = set()
+                consumed_ws: set[str] = set()
+                rows = _decode_state(latest, consumed_base, consumed_ws)
                 for label, value, raw in rows:
                     if row >= h - 4:
                         break
@@ -509,12 +575,16 @@ def _tui_record(args: argparse.Namespace) -> int:
                     stdscr.addstr(row, 0, line_str[:w-1])
                     row += 1
 
-                # Unknown / raw section
+                # Unknown / raw section — show every base/ws key the
+                # decoder didn't consume, so new firmware fields jump
+                # out immediately during a capture.
                 row += 1
                 if row < h - 4:
-                    stdscr.addstr(row, 0, "  Unknown fields:", curses.A_DIM)
+                    stdscr.addstr(row, 0, "  Raw / undecoded fields:", curses.A_DIM)
                     row += 1
-                    for topic, key, repr_val in _unknown_keys(latest):
+                    for topic, key, repr_val in _unknown_keys(
+                        latest, consumed_base, consumed_ws,
+                    ):
                         if row >= h - 4:
                             break
                         s = f"    {topic}.{key:<6} = {repr_val}"
