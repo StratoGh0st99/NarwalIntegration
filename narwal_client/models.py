@@ -542,6 +542,18 @@ class NarwalState:
     error_severity: int = 0
     error_message: str = ""
 
+    # Station activity flags. Field 48.1 can be a single message or a
+    # repeated list when multiple dock activities run in parallel
+    # (e.g. mop drying + dust emptying). Each entry uses an empty
+    # marker sub-field to signal which activity it represents:
+    #   .10 = dust-bag emptying
+    #   .15 = mop drying
+    # WorkingStatus 17 / 19 also indicate mop-drying phases when the
+    # robot is the actor. We surface both signals — see
+    # NarwalStationActivitySensor for the priority logic.
+    station_dust_emptying: bool = False
+    station_mop_drying: bool = False
+
     # Device identity
     device_info: DeviceInfo | None = None
 
@@ -735,11 +747,27 @@ class NarwalState:
                 self.dust_bag_health = int(decoded["41"])
             except (ValueError, TypeError):
                 self.dust_bag_health = 0
-        # Field 48.1.2 = active error struct, empty {} when no error.
-        # Live-confirmed via tank-empty fault on Flow 2:
+        # Field 48.1 carries one or more dock activities. It's a single
+        # message during a normal clean, but switches to a repeated list
+        # when multiple activities overlap (e.g. mop drying while a
+        # dust-bag emptying is queued). Normalize to a list so the
+        # parsers below don't need to care.
+        f48_1 = decoded.get("48", {}).get("1")
+        f48_entries: list[dict[str, Any]] = []
+        if isinstance(f48_1, list):
+            f48_entries = [e for e in f48_1 if isinstance(e, dict)]
+        elif isinstance(f48_1, dict):
+            f48_entries = [f48_1]
+
+        # 48.1.*.2 = active error struct, empty {} when no error.
+        # Live-confirmed via a tank-empty fault on Flow 2:
         #   {1: severity, 2: code, 3: localized_message}
         # Reset to defaults when error clears or field is absent.
-        err = decoded.get("48", {}).get("1", {}).get("2", None)
+        err = next(
+            (e["2"] for e in f48_entries
+             if isinstance(e.get("2"), dict) and e["2"]),
+            None,
+        )
         if isinstance(err, dict) and err:
             try:
                 self.error_severity = int(err.get("1", 0))
@@ -758,6 +786,11 @@ class NarwalState:
             self.error_code = 0
             self.error_severity = 0
             self.error_message = ""
+
+        # Station-activity markers within 48.1.*. Empty `{}` flags signal
+        # which dock activity each entry represents (live-observed).
+        self.station_dust_emptying = any("10" in e for e in f48_entries)
+        self.station_mop_drying = any("15" in e for e in f48_entries)
         # Field 47 = dock indicator (3=docked, 2=undocked)
         if "47" in decoded:
             try:

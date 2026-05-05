@@ -188,7 +188,7 @@ class NarwalStationActivitySensor(NarwalEntity, SensorEntity):
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_translation_key = "station_activity"
-    _attr_options = ["idle", "mop_washing", "mop_drying"]
+    _attr_options = ["idle", "mop_washing", "mop_drying", "dust_emptying"]
     _attr_icon = "mdi:dishwasher"
 
     def __init__(self, coordinator: NarwalCoordinator) -> None:
@@ -201,8 +201,17 @@ class NarwalStationActivitySensor(NarwalEntity, SensorEntity):
         state = self.coordinator.data
         if state is None:
             return None
+        # Mop wash takes priority — the robot is physically engaged
+        # with the basin so other activities can't really overlap.
         if state.working_status == WorkingStatus.MOP_WASHING:
             return "mop_washing"
-        if state.working_status == WorkingStatus.MOP_DRYING:
+        if (
+            state.station_mop_drying
+            or state.working_status in (
+                WorkingStatus.MOP_DRYING, WorkingStatus.MOP_DRYING_ACTIVE,
+            )
+        ):
             return "mop_drying"
+        if state.station_dust_emptying:
+            return "dust_emptying"
         return "idle"

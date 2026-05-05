@@ -51,7 +51,8 @@
         "state": {
           "idle": "Idle",
           "mop_washing": "Mop washing",
-          "mop_drying": "Mop drying"
+          "mop_drying": "Mop drying",
+          "dust_emptying": "Dust emptying"
         }
       },
       "error_code": {
