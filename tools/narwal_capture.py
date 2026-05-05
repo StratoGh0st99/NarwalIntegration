@@ -221,8 +221,357 @@ def _writer_thread(
         _ = notable_only
 
 
+# --- Decoder for known protocol fields ---------------------------------
+#
+# What we already understand about Flow 2 broadcasts (validated live).
+# Everything else we surface as raw key→value so the user can spot new
+# patterns. Keep these dicts in sync with narwal_client.
+
+_WORKING_STATUS = {
+    0: "UNKNOWN", 1: "STANDBY", 3: "MOP_WASHING", 4: "CLEANING",
+    5: "CLEANING_ALT", 10: "DOCKED", 14: "CHARGED",
+    17: "MOP_DRYING", 19: "MOP_DRYING_ACTIVE", 99: "ERROR",
+}
+_SUCTION = {1: "Quiet", 2: "Standard", 3: "Strong", 4: "Super powerful"}
+_MOP_HUMIDITY = {1: "Slightly dry", 2: "Standard", 3: "Slightly wet"}
+_CLEAN_MODE = {
+    1: "Vacuum", 2: "Mop", 3: "Vacuum then mop",
+    4: "Vacuum and mop", 5: "Adaptive (Raumanpassung)",
+}
+
+# Top-level robot_base_status fields we know enough about to label.
+_KNOWN_BASE_KEYS: frozenset[str] = frozenset({
+    "1", "2", "3", "5", "11", "12", "13", "14", "15", "16", "18",
+    "20", "23", "24", "25", "26", "28", "29", "30", "32", "34", "35",
+    "36", "38", "39", "40", "41", "44", "47", "48", "49", "50",
+})
+_KNOWN_WS_KEYS: frozenset[str] = frozenset({
+    "3", "5", "6", "13", "15", "18", "19", "22",
+})
+
+
+def _f32(val: Any) -> float | None:
+    """Decode a float32 stored as int bits (or already a float)."""
+    if isinstance(val, float):
+        return val
+    if isinstance(val, int):
+        try:
+            import struct
+            return struct.unpack("f", struct.pack("I", val & 0xFFFFFFFF))[0]
+        except Exception:
+            return None
+    return None
+
+
+def _f48_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize robot_base_status field 48.1 to a list of dicts."""
+    f1 = payload.get("48", {}).get("1") if isinstance(payload.get("48"), dict) else None
+    if isinstance(f1, list):
+        return [e for e in f1 if isinstance(e, dict)]
+    if isinstance(f1, dict):
+        return [f1]
+    return []
+
+
+def _decode_state(latest: dict[str, dict[str, Any]]) -> list[tuple[str, str, str]]:
+    """Build (label, value, raw_field) rows from the latest broadcasts.
+
+    Only includes fields we understand. Unknown stuff goes through
+    _unknown_keys() so the operator can spot new patterns.
+    """
+    bs = latest.get("status/robot_base_status") or {}
+    ws = latest.get("status/working_status") or {}
+    rows: list[tuple[str, str, str]] = []
+
+    # Working status
+    f3 = bs.get("3") if isinstance(bs.get("3"), dict) else {}
+    ws_id = f3.get("1") if isinstance(f3, dict) else None
+    rows.append((
+        "Status",
+        f"{_WORKING_STATUS.get(ws_id, '?')} ({ws_id})" if ws_id is not None else "-",
+        f"3.1={ws_id}",
+    ))
+
+    # Battery (% from float32 in field 2)
+    bat = _f32(bs.get("2"))
+    rows.append(("Battery", f"{bat:.1f}%" if bat is not None else "-", "2 (float32)"))
+
+    # Suction
+    s = bs.get("26")
+    rows.append(("Suction", f"{_SUCTION.get(s, '?')} ({s})" if s else "-", "26"))
+
+    # Mop humidity
+    h = bs.get("29")
+    rows.append((
+        "Mop humidity",
+        f"{_MOP_HUMIDITY.get(h, '?')} ({h})" if h else "-",
+        "29",
+    ))
+
+    # Dust bag
+    db = bs.get("41")
+    rows.append(("Dust bag", f"{db}%" if db is not None else "-", "41"))
+
+    # Coverage precision (1 = Standard, absent = Meticulous; tentative)
+    cp = bs.get("34")
+    if cp == 1:
+        rows.append(("Coverage", "Standard (tentative)", "34=1"))
+    elif cp is None:
+        rows.append(("Coverage", "Meticulous? (34 absent)", "34=∅"))
+    else:
+        rows.append(("Coverage", f"unknown (34={cp})", "34"))
+
+    # Pause / cleaning sub-state
+    paused = isinstance(f3, dict) and f3.get("2") == 1
+    returning = isinstance(f3, dict) and f3.get("7") == 1
+    sub = []
+    if paused:
+        sub.append("paused")
+    if returning:
+        sub.append("returning")
+    rows.append(("Sub-state", ", ".join(sub) or "-",
+                 f"3.2={f3.get('2') if isinstance(f3, dict) else '-'} 3.7={f3.get('7') if isinstance(f3, dict) else '-'}"))
+
+    # Field 48: parse markers + clean-task config + error
+    entries = _f48_entries(bs)
+    markers: list[str] = []
+    err_info: dict[str, Any] | None = None
+    clean_cfg: dict[str, Any] | None = None
+    for e in entries:
+        if "10" in e:
+            markers.append("dust_emptying")
+        if "13" in e:
+            markers.append("?13")
+        if "15" in e:
+            markers.append("mop_drying")
+        if "5" in e and isinstance(e.get("5"), dict):
+            clean_cfg = e["5"].get("1") if isinstance(e["5"].get("1"), dict) else None
+        if "2" in e and isinstance(e.get("2"), dict) and e["2"]:
+            err_info = e["2"]
+
+    rows.append(("Station markers", ", ".join(markers) or "-", "48.1.*"))
+
+    # Active clean task config (when running)
+    if clean_cfg:
+        mode = clean_cfg.get("1")
+        mh = clean_cfg.get("2")
+        passes = clean_cfg.get("3")
+        cfg_str = (
+            f"{_CLEAN_MODE.get(mode, '?')} ({mode}), mop={_MOP_HUMIDITY.get(mh, mh)}"
+            + (f", passes={passes}" if passes else "")
+        )
+        rows.append(("Active task", cfg_str, "48.1.*.5.1"))
+    else:
+        rows.append(("Active task", "-", "48.1.*.5.1"))
+
+    # Error
+    if err_info:
+        code = err_info.get("2")
+        msg = err_info.get("3", "")
+        sev = err_info.get("1", "?")
+        rows.append((
+            "ERROR",
+            f"sev={sev} code={code} ({code:#010x})  «{msg}»"
+            if isinstance(code, int) else f"sev={sev} {err_info!r}",
+            "48.1.*.2",
+        ))
+    else:
+        rows.append(("Error", "none", "48.1.*.2"))
+
+    # working_status: room queue + current room
+    wf5 = ws.get("5") if isinstance(ws, dict) else None
+    if isinstance(wf5, list):
+        rooms = [str(e.get("1")) for e in wf5 if isinstance(e, dict)]
+        rows.append(("Room queue", ", ".join(rooms) or "-", "ws.5"))
+    elif isinstance(wf5, dict):
+        rows.append(("Room queue", str(wf5.get("1")), "ws.5"))
+    else:
+        rows.append(("Room queue", "-", "ws.5"))
+    cur = ws.get("6")
+    rows.append(("Current room", str(cur) if cur is not None else "-", "ws.6"))
+
+    return rows
+
+
+def _unknown_keys(latest: dict[str, dict[str, Any]]) -> list[tuple[str, str, str]]:
+    """Return (topic, key, raw repr) for fields we don't decode yet."""
+    out: list[tuple[str, str, str]] = []
+    bs = latest.get("status/robot_base_status") or {}
+    for k in sorted(bs.keys(), key=lambda x: int(x) if x.isdigit() else 999):
+        if k in _KNOWN_BASE_KEYS:
+            continue
+        out.append(("base", k, repr(bs[k])[:60]))
+    ws = latest.get("status/working_status") or {}
+    for k in sorted(ws.keys(), key=lambda x: int(x) if x.isdigit() else 999):
+        if k in _KNOWN_WS_KEYS:
+            continue
+        out.append(("working", k, repr(ws[k])[:60]))
+    return out
+
+
+# --- TUI ---------------------------------------------------------------
+
+
+def _tui_record(args: argparse.Namespace) -> int:
+    """Curses TUI: live decoded state table + annotation prompt."""
+    import curses
+    import locale
+    import queue as _q
+
+    locale.setlocale(locale.LC_ALL, "")
+
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    stop = threading.Event()
+    counter = [0]
+    msg_q: _q.Queue = _q.Queue()
+    latest: dict[str, dict[str, Any]] = {}
+    last_change_label = "—"
+    last_payloads: dict[str, dict[str, Any]] = {}
+
+    def worker(out_fp: TextIO) -> None:
+        for line in _iter_log_stream(args.host):
+            if stop.is_set():
+                break
+            m = DUMP_RE.match(line)
+            if not m:
+                continue
+            topic = m.group("topic")
+            log_ts = m.group("ts")
+            payload = _parse_payload(m.group("payload"))
+            # persist every broadcast
+            out_fp.write(json.dumps({
+                "kind": "broadcast",
+                "ts": _now_iso(),
+                "log_ts": log_ts,
+                "topic": topic,
+                "payload": payload,
+            }, default=str) + "\n")
+            out_fp.flush()
+            counter[0] += 1
+            msg_q.put((topic, log_ts, payload))
+
+    def tui_main(stdscr: "curses.window") -> None:
+        nonlocal last_change_label
+        curses.curs_set(1)
+        stdscr.nodelay(True)
+        stdscr.timeout(50)  # ms — also drives the redraw cadence
+
+        # Header noting the session start.
+        with out_path.open("a") as out_fp:
+            out_fp.write(json.dumps({
+                "kind": "session_start",
+                "ts": _now_iso(),
+                "host": args.host,
+                "mode": "tui",
+            }) + "\n")
+            out_fp.flush()
+
+            t = threading.Thread(target=worker, args=(out_fp,), daemon=True)
+            t.start()
+
+            input_buf = ""
+            while not stop.is_set():
+                # Drain any queued broadcasts.
+                drained = 0
+                while True:
+                    try:
+                        topic, log_ts, payload = msg_q.get_nowait()
+                    except _q.Empty:
+                        break
+                    if isinstance(payload, dict):
+                        # Compute notable diff for the change label.
+                        if topic == "status/robot_base_status":
+                            d = _diff_dict(last_payloads.get(topic), payload, _NOISE_BASE_KEYS)
+                            if d:
+                                last_change_label = f"[{log_ts}] base: " + ", ".join(d[:3])
+                        elif topic == "status/working_status":
+                            d = _diff_dict(last_payloads.get(topic), payload, _NOISE_WS_KEYS)
+                            if d:
+                                last_change_label = f"[{log_ts}] ws: " + ", ".join(d[:3])
+                        last_payloads[topic] = payload
+                        latest[topic] = payload
+                    drained += 1
+
+                # Redraw (cheap, only when input received or every tick).
+                stdscr.erase()
+                h, w = stdscr.getmaxyx()
+                title = f"narwal-capture · host={args.host} · broadcasts={counter[0]} · {out_path.name}"
+                stdscr.addstr(0, 0, title[:w-1], curses.A_BOLD)
+                stdscr.addstr(1, 0, "─" * (w - 1))
+
+                row = 2
+                rows = _decode_state(latest)
+                for label, value, raw in rows:
+                    if row >= h - 4:
+                        break
+                    line_str = f"  {label:<16} {value:<48} {raw}"
+                    stdscr.addstr(row, 0, line_str[:w-1])
+                    row += 1
+
+                # Unknown / raw section
+                row += 1
+                if row < h - 4:
+                    stdscr.addstr(row, 0, "  Unknown fields:", curses.A_DIM)
+                    row += 1
+                    for topic, key, repr_val in _unknown_keys(latest):
+                        if row >= h - 4:
+                            break
+                        s = f"    {topic}.{key:<6} = {repr_val}"
+                        stdscr.addstr(row, 0, s[:w-1], curses.A_DIM)
+                        row += 1
+
+                # Last notable change line + prompt
+                stdscr.addstr(h - 3, 0, ("Δ " + last_change_label)[:w-1], curses.A_DIM)
+                stdscr.addstr(h - 2, 0, "─" * (w - 1))
+                prompt = f"> {input_buf}"
+                stdscr.addstr(h - 1, 0, prompt[:w-1])
+                stdscr.move(h - 1, min(len(prompt), w - 1))
+                stdscr.refresh()
+
+                # Poll keypress.
+                ch = stdscr.getch()
+                if ch == -1:
+                    continue
+                if ch in (3, 4, 27):  # Ctrl-C / Ctrl-D / ESC
+                    break
+                if ch in (10, 13):  # Enter
+                    text = input_buf.strip()
+                    input_buf = ""
+                    if not text:
+                        continue
+                    out_fp.write(json.dumps({
+                        "kind": "annotation",
+                        "ts": _now_iso(),
+                        "text": text,
+                    }) + "\n")
+                    out_fp.flush()
+                elif ch in (curses.KEY_BACKSPACE, 127, 8):
+                    input_buf = input_buf[:-1]
+                elif 32 <= ch < 127:
+                    input_buf += chr(ch)
+
+        stop.set()
+
+    try:
+        curses.wrapper(tui_main)
+    finally:
+        stop.set()
+        print(f"\nStopped after {counter[0]} broadcasts. Capture: {out_path}",
+              file=sys.stderr)
+    return 0
+
+
 def cmd_record(args: argparse.Namespace) -> int:
-    """Stream + annotate. Type a label + Enter to mark a moment."""
+    """Stream + annotate.
+
+    Default mode is the curses TUI dashboard (decoded state table +
+    annotation prompt). --simple falls back to the line-oriented mode
+    (annotations on stdin, broadcasts written to JSONL only).
+    """
+    if not args.simple:
+        return _tui_record(args)
+
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     lock = threading.Lock()
@@ -378,7 +727,11 @@ def main() -> int:
     rec.add_argument("--out", required=True, help="JSONL output path")
     rec.add_argument(
         "--verbose", "-v", action="store_true",
-        help="echo each broadcast on stderr (clutters the input prompt; off by default)",
+        help="(simple mode only) echo each broadcast on stderr",
+    )
+    rec.add_argument(
+        "--simple", action="store_true",
+        help="line-oriented mode (no curses TUI). Useful in CI / dumb terminals.",
     )
     rec.set_defaults(func=cmd_record)
 
