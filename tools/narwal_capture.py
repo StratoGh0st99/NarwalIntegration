@@ -94,36 +94,131 @@ def _iter_log_stream(host: str) -> Iterator[str]:
             proc.kill()
 
 
+# Topics whose changes we never report — they're either pure noise
+# (display_map fires every ~1.5s during cleaning, download_status is
+# usually a constant `2`) or reach the change-detector via a different
+# topic (working_status duplicates many robot_base_status sub-fields).
+_NOISY_TOPICS: frozenset[str] = frozenset({
+    "map/display_map",
+    "status/download_status",
+    "upgrade/upgrade_status",
+})
+
+# Top-level robot_base_status keys whose values change every broadcast
+# without anything semantic happening (battery jitter, monotonic
+# timestamps, session ids). Filtering them keeps the change-hint
+# signal-to-noise ratio high.
+_NOISE_BASE_KEYS: frozenset[str] = frozenset({
+    "2",   # battery float32 — jitters slightly each tick
+    "13",  # session id (string)
+    "35",  # secondary battery / charging value
+    "36",  # last-update timestamp (ms epoch)
+})
+
+# Working-status fields that tick every broadcast during a clean
+# (elapsed time, area, the always-600 cumulative-time-ish field).
+_NOISE_WS_KEYS: frozenset[str] = frozenset({"3", "13", "15"})
+
+
+def _diff_dict(
+    a: dict[str, Any] | None,
+    b: dict[str, Any] | None,
+    skip: frozenset[str],
+) -> list[str]:
+    """Return short 'k: x → y' strings for non-noise key changes."""
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return []
+    keys = (set(a) | set(b)) - skip
+    out = []
+    for k in sorted(keys, key=lambda x: int(x) if x.isdigit() else 999):
+        va, vb = a.get(k), b.get(k)
+        if va == vb:
+            continue
+        # Truncate long values so the hint fits one line.
+        sa = repr(va)
+        sb = repr(vb)
+        if len(sa) > 40:
+            sa = sa[:37] + "…"
+        if len(sb) > 40:
+            sb = sb[:37] + "…"
+        out.append(f"{k}: {sa}→{sb}")
+    return out
+
+
 def _writer_thread(
     host: str, out_fp: TextIO, lock: threading.Lock,
     stop: threading.Event, verbose: bool, counter: list[int],
+    notable_only: bool,
 ) -> None:
     """Read SSH log stream, write parsed DUMP lines to the JSONL output."""
+    last_payload: dict[str, dict[str, Any]] = {}
     for line in _iter_log_stream(host):
         if stop.is_set():
             break
         m = DUMP_RE.match(line)
         if not m:
             continue
+        topic = m.group("topic")
+        payload = _parse_payload(m.group("payload"))
         record = {
             "kind": "broadcast",
             "ts": _now_iso(),
             "log_ts": m.group("ts"),
-            "topic": m.group("topic"),
-            "payload": _parse_payload(m.group("payload")),
+            "topic": topic,
+            "payload": payload,
         }
+
+        # Detect notable change vs last seen payload on the same topic.
+        notable_diff: list[str] = []
+        if topic == "status/robot_base_status":
+            notable_diff = _diff_dict(
+                last_payload.get(topic), payload if isinstance(payload, dict) else None,
+                _NOISE_BASE_KEYS,
+            )
+        elif topic == "status/working_status":
+            notable_diff = _diff_dict(
+                last_payload.get(topic), payload if isinstance(payload, dict) else None,
+                _NOISE_WS_KEYS,
+            )
+        if isinstance(payload, dict):
+            last_payload[topic] = payload
+
         with lock:
             out_fp.write(json.dumps(record, default=str) + "\n")
             out_fp.flush()
             counter[0] += 1
             if verbose:
-                # Verbose mode shares the terminal with the input
-                # prompt, which makes typing annotations awkward
-                # (the cursor jumps as broadcasts arrive). Default
-                # is silent — `tail -f <out>.jsonl` in another window
-                # if you want to watch the stream.
-                print(f"  [{record['log_ts']}] {record['topic']}",
+                # Verbose mode shares the terminal with the input prompt,
+                # so the cursor jumps as broadcasts arrive. Default is
+                # silent — `tail -f <out>.jsonl` in another window if
+                # you want to watch the stream.
+                print(f"  [{record['log_ts']}] {topic}",
                       file=sys.stderr)
+            elif notable_diff and topic not in _NOISY_TOPICS:
+                # Bell + one-line hint so the user notices an
+                # interesting change but can keep typing. Doesn't
+                # interrupt the input line — readline redraws on the
+                # next keystroke.
+                short_topic = topic.rsplit("/", 1)[-1]
+                hint = ", ".join(notable_diff[:4])
+                if len(notable_diff) > 4:
+                    hint += f" (+{len(notable_diff) - 4} more)"
+                print(f"\a\n[*] {short_topic}: {hint}",
+                      file=sys.stderr, flush=True)
+                # Persist the diff alongside the broadcast for replay.
+                out_fp.write(json.dumps({
+                    "kind": "change",
+                    "ts": record["ts"],
+                    "log_ts": record["log_ts"],
+                    "topic": topic,
+                    "diff": notable_diff,
+                }) + "\n")
+                out_fp.flush()
+        # notable_only currently doesn't drop broadcasts from the
+        # JSONL; it's reserved for a future flag if the captures get
+        # too big to keep raw. Plumbed through now so callers don't
+        # break.
+        _ = notable_only
 
 
 def cmd_record(args: argparse.Namespace) -> int:
@@ -152,7 +247,7 @@ def cmd_record(args: argparse.Namespace) -> int:
 
         worker = threading.Thread(
             target=_writer_thread,
-            args=(args.host, out_fp, lock, stop, args.verbose, counter),
+            args=(args.host, out_fp, lock, stop, args.verbose, counter, False),
             daemon=True,
         )
         worker.start()
