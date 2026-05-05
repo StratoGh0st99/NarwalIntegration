@@ -581,10 +581,14 @@ class NarwalState:
     # rooms still pending.
     rooms_completed: list[int] = field(default_factory=list)
 
-    # Mop-drying timer (Flow 2). Hypothesis from a live mop-drying
-    # session: ws.8 counts elapsed seconds since drying started,
-    # ws.9 is the cycle's total target seconds (≈ 12600 = 3.5h on
-    # stock firmware). Both 0 when drying is not active.
+    # Mop-drying timer (Flow 2). Live-confirmed by toggling between
+    # drying modes:
+    #   ws.8 = elapsed seconds since the cycle started
+    #   ws.9 = target total seconds for the selected mode
+    #     - 12600 (3.5 h) for default / smart / strong
+    #     - 18000 (5 h)   for silent
+    # Switching modes mid-cycle rescales ws.8 so the percent-complete
+    # stays consistent. Both fields drop to 0 once drying stops.
     mop_drying_elapsed: int = 0
     mop_drying_target: int = 0
 

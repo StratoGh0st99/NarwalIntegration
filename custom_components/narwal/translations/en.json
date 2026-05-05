@@ -32,6 +32,9 @@
       "cleaning_progress": {
         "name": "Cleaning progress"
       },
+      "mop_drying_progress": {
+        "name": "Mop drying progress"
+      },
       "cleaning_time": {
         "name": "Cleaning time"
       },

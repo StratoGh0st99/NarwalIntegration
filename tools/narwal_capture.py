@@ -480,8 +480,9 @@ def _decode_state(
         rows.append(("Elapsed", f"{ws['3']} s", "ws.3"))
         consumed_ws.add("3")
 
-    # Mop-drying timer (hypothesis): ws.8 = elapsed seconds since
-    # drying started, ws.9 = total target seconds.
+    # Mop-drying timer (live-confirmed): ws.8 = elapsed seconds since
+    # drying started, ws.9 = total target seconds. Silent mode targets
+    # 18000 s (5 h); default / smart / strong target 12600 s (3.5 h).
     if "8" in ws or "9" in ws:
         elapsed = ws.get("8", 0)
         target = ws.get("9", 0)

@@ -68,6 +68,18 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         ),
     ),
     NarwalSensorEntityDescription(
+        key="mop_drying_progress",
+        translation_key="mop_drying_progress",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        # ws.8 elapsed seconds / ws.9 target seconds.
+        # Hidden when no drying cycle is active (target == 0).
+        value_fn=lambda state: (
+            round(state.mop_drying_elapsed * 100 / state.mop_drying_target, 1)
+            if state.mop_drying_target > 0 else None
+        ),
+    ),
+    NarwalSensorEntityDescription(
         key="cleaning_time",
         translation_key="cleaning_time",
         device_class=SensorDeviceClass.DURATION,
