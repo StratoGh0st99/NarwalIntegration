@@ -95,7 +95,8 @@ def _iter_log_stream(host: str) -> Iterator[str]:
 
 
 def _writer_thread(
-    host: str, out_fp: TextIO, lock: threading.Lock, stop: threading.Event,
+    host: str, out_fp: TextIO, lock: threading.Lock,
+    stop: threading.Event, verbose: bool, counter: list[int],
 ) -> None:
     """Read SSH log stream, write parsed DUMP lines to the JSONL output."""
     for line in _iter_log_stream(host):
@@ -114,7 +115,15 @@ def _writer_thread(
         with lock:
             out_fp.write(json.dumps(record, default=str) + "\n")
             out_fp.flush()
-            print(f"  [{record['log_ts']}] {record['topic']}", file=sys.stderr)
+            counter[0] += 1
+            if verbose:
+                # Verbose mode shares the terminal with the input
+                # prompt, which makes typing annotations awkward
+                # (the cursor jumps as broadcasts arrive). Default
+                # is silent — `tail -f <out>.jsonl` in another window
+                # if you want to watch the stream.
+                print(f"  [{record['log_ts']}] {record['topic']}",
+                      file=sys.stderr)
 
 
 def cmd_record(args: argparse.Namespace) -> int:
@@ -123,6 +132,7 @@ def cmd_record(args: argparse.Namespace) -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     lock = threading.Lock()
     stop = threading.Event()
+    counter = [0]
 
     print(
         f"Recording to {out_path}.\n"
@@ -142,7 +152,7 @@ def cmd_record(args: argparse.Namespace) -> int:
 
         worker = threading.Thread(
             target=_writer_thread,
-            args=(args.host, out_fp, lock, stop),
+            args=(args.host, out_fp, lock, stop, args.verbose, counter),
             daemon=True,
         )
         worker.start()
@@ -163,9 +173,11 @@ def cmd_record(args: argparse.Namespace) -> int:
                         "text": text,
                     }) + "\n")
                     out_fp.flush()
+                    print(f"    [annotated; {counter[0]} broadcasts so far]",
+                          file=sys.stderr)
         finally:
             stop.set()
-            print("\nStopped.", file=sys.stderr)
+            print(f"\nStopped after {counter[0]} broadcasts.", file=sys.stderr)
     return 0
 
 
@@ -264,6 +276,10 @@ def main() -> int:
     rec = sub.add_parser("record", help="record annotated broadcasts")
     rec.add_argument("--host", required=True, help="ssh target, e.g. root@192.168.178.3")
     rec.add_argument("--out", required=True, help="JSONL output path")
+    rec.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="echo each broadcast on stderr (clutters the input prompt; off by default)",
+    )
     rec.set_defaults(func=cmd_record)
 
     diff = sub.add_parser("diff", help="diff latest broadcast per topic between two captures")
