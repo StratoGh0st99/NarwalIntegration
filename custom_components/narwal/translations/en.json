@@ -66,6 +66,9 @@
       },
       "error_message": {
         "name": "Error message"
+      },
+      "user_action_seconds_left": {
+        "name": "User action seconds left"
       }
     },
     "binary_sensor": {
@@ -81,6 +84,9 @@
       },
       "active_error": {
         "name": "Active error"
+      },
+      "user_action_required": {
+        "name": "User action required"
       }
     },
     "select": {

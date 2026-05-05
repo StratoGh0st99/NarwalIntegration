@@ -78,6 +78,20 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         ),
     ),
     NarwalSensorEntityDescription(
+        key="user_action_seconds_left",
+        translation_key="user_action_seconds_left",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        state_class=SensorStateClass.MEASUREMENT,
+        # Time before the robot's user-action prompt times out.
+        # Hidden when no action is required.
+        value_fn=lambda state: (
+            max(state.user_action_target - state.user_action_elapsed, 0)
+            if state.user_action_type != 0 and state.user_action_target > 0
+            else None
+        ),
+    ),
+    NarwalSensorEntityDescription(
         key="cleaning_time",
         translation_key="cleaning_time",
         device_class=SensorDeviceClass.DURATION,

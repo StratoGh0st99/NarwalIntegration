@@ -592,6 +592,25 @@ class NarwalState:
     mop_drying_elapsed: int = 0
     mop_drying_target: int = 0
 
+    # User-action prompt (Flow 2). When the robot needs the user to
+    # do something physical (carry me to dock, refill the tank, etc.)
+    # it broadcasts a structured prompt and starts a countdown. Empty
+    # / 0 when nothing is required:
+    #   user_action_type    = base.3.16 (2=fill tank, 3=return after
+    #                         clean, 4=return before clean — observed)
+    #   user_action_elapsed = ws.22.1 — seconds the user has been
+    #                         asked already
+    #   user_action_target  = ws.22.2 — timeout in seconds (600 / 3600
+    #                         observed)
+    user_action_type: int = 0
+    user_action_elapsed: int = 0
+    user_action_target: int = 0
+
+    # Map-identity signature (Flow 2). Multi-map houses switch
+    # base.30 / base.44 between maps; treat the pair as an opaque
+    # key — when it changes the active map has changed.
+    map_signature: tuple[int | None, int | None] = (None, None)
+
     # Map
     map_data: MapData | None = None
     map_display_data: MapDisplayData | None = None
@@ -752,6 +771,21 @@ class NarwalState:
             self.mop_drying_target = int(decoded.get("9", 0) or 0)
         except (ValueError, TypeError):
             self.mop_drying_target = 0
+        # ws.22 = user-action countdown ({1: elapsed, 2: target}). Empty
+        # dict when no action is required.
+        f22 = decoded.get("22")
+        if isinstance(f22, dict) and f22:
+            try:
+                self.user_action_elapsed = int(f22.get("1", 0) or 0)
+            except (ValueError, TypeError):
+                self.user_action_elapsed = 0
+            try:
+                self.user_action_target = int(f22.get("2", 0) or 0)
+            except (ValueError, TypeError):
+                self.user_action_target = 0
+        else:
+            self.user_action_elapsed = 0
+            self.user_action_target = 0
         if "15" in decoded:
             # Field 15 may be cumulative time; prefer field 3 for current session
             pass
@@ -900,6 +934,29 @@ class NarwalState:
                 self.dock_presence = int(field3.get("3", 0))
             except (ValueError, TypeError):
                 self.dock_presence = 0
+            # Sub-field 16 = user-action prompt type (Flow 2):
+            #   2 = fill water tank / problem solved
+            #   3 = bring robot to dock after clean done
+            #   4 = bring robot to dock to start clean
+            try:
+                self.user_action_type = int(field3.get("16", 0) or 0)
+            except (ValueError, TypeError):
+                self.user_action_type = 0
+        else:
+            self.user_action_type = 0
+
+        # Map identity (Flow 2). base.30 + base.44 form an opaque
+        # signature that flips between saved maps; track them so the
+        # coordinator can refresh get_map() when the user switches.
+        try:
+            sig30 = int(decoded["30"]) if "30" in decoded else None
+        except (ValueError, TypeError):
+            sig30 = None
+        try:
+            sig44 = int(decoded["44"]) if "44" in decoded else None
+        except (ValueError, TypeError):
+            sig44 = None
+        self.map_signature = (sig30, sig44)
         if "2" in decoded:
             # Field 2 = real-time battery SOC as float32
             # (e.g. 1118175232 → 83.0%; bbp may return int or float)
