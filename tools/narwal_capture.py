@@ -432,6 +432,52 @@ def _decode_state(
         rows.append(("Timestamp (ms)", str(ts36), "36"))
         consumed_base.add("36")
 
+    # Map signature: base.30 + base.44 form an opaque pair that flips
+    # between saved maps (live-confirmed by the multi-map test).
+    sig30 = bs.get("30")
+    sig44 = bs.get("44")
+    if sig30 is not None or sig44 is not None:
+        rows.append((
+            "Map signature",
+            f"30={sig30!s} 44={sig44!s}",
+            "30, 44",
+        ))
+    consumed_base.add("30")
+    consumed_base.add("44")
+
+    # User-action prompt: base.3.16 + ws.22 ({1: elapsed, 2: target}).
+    # Live-observed prompt types: 2=fill_water, 3=return_to_dock_after_clean,
+    # 4=carry_to_dock_to_start. Targets: 600 s (10 min) for fill / start,
+    # 3600 s (1 h) for end-of-clean return.
+    ua_type = f3.get("16") if isinstance(f3, dict) else None
+    f22 = ws.get("22") if isinstance(ws, dict) else None
+    if ua_type or (isinstance(f22, dict) and f22):
+        ua_names = {
+            2: "fill_water_tank",
+            3: "return_to_dock_after_clean",
+            4: "carry_to_dock_to_start",
+        }
+        elapsed = f22.get("1", 0) if isinstance(f22, dict) else 0
+        target = f22.get("2", 0) if isinstance(f22, dict) else 0
+        try:
+            elapsed_i = int(elapsed) if elapsed else 0
+            target_i = int(target) if target else 0
+        except (ValueError, TypeError):
+            elapsed_i = target_i = 0
+        if target_i > 0:
+            remaining = max(target_i - elapsed_i, 0)
+            timer = f"{elapsed_i}/{target_i}s ({remaining}s left)"
+        else:
+            timer = "-"
+        rows.append((
+            "User action",
+            f"{ua_names.get(ua_type, '?')} ({ua_type}) {timer}",
+            "3.16 + ws.22",
+        ))
+    else:
+        rows.append(("User action", "-", "3.16 + ws.22"))
+    consumed_ws.add("22")
+
     # working_status: room queue (with completion flags) + current
     # room + cleaning telemetry. ws.5[i].4 = 1 marks a finished room.
     wf5 = ws.get("5") if isinstance(ws, dict) else None
