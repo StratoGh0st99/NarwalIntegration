@@ -408,6 +408,10 @@ class NarwalClient:
             _LOGGER.debug("Failed to decode protobuf for topic %s", short_topic)
             return
 
+        # Log every decoded broadcast at DEBUG so tools/narwal_capture.py
+        # (and ad-hoc protocol RE) can pick them out of `ha core logs`.
+        # Cheap when DEBUG isn't enabled — _LOGGER.debug short-circuits.
+        _LOGGER.debug("DUMP %s: %r", short_topic, decoded)
         if short_topic == "status/working_status":
             self.state.update_from_working_status(decoded)
         elif short_topic == "status/robot_base_status":
