@@ -518,8 +518,10 @@ def _tui_record(args: argparse.Namespace) -> int:
     def tui_main(stdscr: "curses.window") -> None:
         nonlocal last_change_label
         curses.curs_set(1)
-        stdscr.nodelay(True)
-        stdscr.timeout(50)  # ms — also drives the redraw cadence
+        # Short timeout = responsive keystrokes. We don't redraw on every
+        # tick, only when state or input changed, so the loop can run
+        # tight without burning CPU.
+        stdscr.timeout(15)
 
         # Header noting the session start.
         with out_path.open("a") as out_fp:
@@ -535,66 +537,79 @@ def _tui_record(args: argparse.Namespace) -> int:
             t.start()
 
             input_buf = ""
+            dirty = True  # force initial draw
             while not stop.is_set():
-                # Drain any queued broadcasts.
-                drained = 0
+                # Drain any queued broadcasts. Each one that actually
+                # mutates state flips the dirty flag.
                 while True:
                     try:
                         topic, log_ts, payload = msg_q.get_nowait()
                     except _q.Empty:
                         break
                     if isinstance(payload, dict):
-                        # Compute notable diff for the change label.
+                        prev = last_payloads.get(topic)
                         if topic == "status/robot_base_status":
-                            d = _diff_dict(last_payloads.get(topic), payload, _NOISE_BASE_KEYS)
+                            d = _diff_dict(prev, payload, _NOISE_BASE_KEYS)
                             if d:
                                 last_change_label = f"[{log_ts}] base: " + ", ".join(d[:3])
+                                dirty = True
                         elif topic == "status/working_status":
-                            d = _diff_dict(last_payloads.get(topic), payload, _NOISE_WS_KEYS)
+                            d = _diff_dict(prev, payload, _NOISE_WS_KEYS)
                             if d:
                                 last_change_label = f"[{log_ts}] ws: " + ", ".join(d[:3])
+                                dirty = True
+                        if prev != payload:
+                            dirty = True
                         last_payloads[topic] = payload
                         latest[topic] = payload
-                    drained += 1
 
-                # Redraw (cheap, only when input received or every tick).
-                stdscr.erase()
-                h, w = stdscr.getmaxyx()
-                title = f"narwal-capture · host={args.host} · broadcasts={counter[0]} · {out_path.name}"
-                stdscr.addstr(0, 0, title[:w-1], curses.A_BOLD)
-                stdscr.addstr(1, 0, "─" * (w - 1))
+                if dirty:
+                    stdscr.erase()
+                    h, w = stdscr.getmaxyx()
+                    title = (
+                        f"narwal-capture · host={args.host} · "
+                        f"broadcasts={counter[0]} · {out_path.name}"
+                    )
+                    stdscr.addstr(0, 0, title[:w-1], curses.A_BOLD)
+                    stdscr.addstr(1, 0, "─" * (w - 1))
 
-                row = 2
-                consumed_base: set[str] = set()
-                consumed_ws: set[str] = set()
-                rows = _decode_state(latest, consumed_base, consumed_ws)
-                for label, value, raw in rows:
-                    if row >= h - 4:
-                        break
-                    line_str = f"  {label:<16} {value:<48} {raw}"
-                    stdscr.addstr(row, 0, line_str[:w-1])
-                    row += 1
-
-                # Unknown / raw section — show every base/ws key the
-                # decoder didn't consume, so new firmware fields jump
-                # out immediately during a capture.
-                row += 1
-                if row < h - 4:
-                    stdscr.addstr(row, 0, "  Raw / undecoded fields:", curses.A_DIM)
-                    row += 1
-                    for topic, key, repr_val in _unknown_keys(
-                        latest, consumed_base, consumed_ws,
-                    ):
+                    row = 2
+                    consumed_base: set[str] = set()
+                    consumed_ws: set[str] = set()
+                    rows = _decode_state(latest, consumed_base, consumed_ws)
+                    for label, value, raw in rows:
                         if row >= h - 4:
                             break
-                        s = f"    {topic}.{key:<6} = {repr_val}"
-                        stdscr.addstr(row, 0, s[:w-1], curses.A_DIM)
+                        line_str = f"  {label:<16} {value:<48} {raw}"
+                        stdscr.addstr(row, 0, line_str[:w-1])
                         row += 1
 
-                # Last notable change line + prompt
-                stdscr.addstr(h - 3, 0, ("Δ " + last_change_label)[:w-1], curses.A_DIM)
-                stdscr.addstr(h - 2, 0, "─" * (w - 1))
+                    # Raw / undecoded section — every base/ws key the
+                    # decoder didn't consume.
+                    row += 1
+                    if row < h - 4:
+                        stdscr.addstr(row, 0, "  Raw / undecoded fields:", curses.A_DIM)
+                        row += 1
+                        for topic, key, repr_val in _unknown_keys(
+                            latest, consumed_base, consumed_ws,
+                        ):
+                            if row >= h - 4:
+                                break
+                            s = f"    {topic}.{key:<6} = {repr_val}"
+                            stdscr.addstr(row, 0, s[:w-1], curses.A_DIM)
+                            row += 1
+
+                    # Last notable change line.
+                    stdscr.addstr(h - 3, 0, ("Δ " + last_change_label)[:w-1], curses.A_DIM)
+                    stdscr.addstr(h - 2, 0, "─" * (w - 1))
+                    dirty = False
+
+                # Always repaint just the input line — cheaper than a
+                # full erase and keeps typing instant.
+                h, w = stdscr.getmaxyx()
                 prompt = f"> {input_buf}"
+                stdscr.move(h - 1, 0)
+                stdscr.clrtoeol()
                 stdscr.addstr(h - 1, 0, prompt[:w-1])
                 stdscr.move(h - 1, min(len(prompt), w - 1))
                 stdscr.refresh()
