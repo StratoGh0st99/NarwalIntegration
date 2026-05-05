@@ -227,6 +227,11 @@ _WORKING_STATUS = {
     5: "CLEANING_ALT", 10: "DOCKED", 14: "CHARGED",
     17: "MOP_DRYING", 19: "MOP_DRYING_ACTIVE", 99: "ERROR",
 }
+_ERROR_CODES = {
+    0x01010036: "clean_water_dirty_tank_anomaly",
+    0x01010137: "clean_water_tank_empty",
+    0x02310031: "robot_lifted",
+}
 _SUCTION = {1: "Quiet", 2: "Standard", 3: "Strong", 4: "Super powerful"}
 _MOP_HUMIDITY = {1: "Slightly dry", 2: "Standard", 3: "Slightly wet"}
 _CLEAN_MODE = {
@@ -392,16 +397,25 @@ def _decode_state(
     else:
         rows.append(("Active task", "-", "48.1.*.5.1"))
 
-    # Error
+    # Error — also check the secondary channel at base.1 (different
+    # field order: 1=code, 2=severity, 3=formatted message banner).
+    if not err_info and isinstance(bs.get("1"), dict) and bs.get("1"):
+        f1 = bs["1"]
+        err_info = {
+            "1": f1.get("2"),
+            "2": f1.get("1"),
+            "3": f1.get("3", ""),
+        }
     if err_info:
         code = err_info.get("2")
         msg = err_info.get("3", "")
         sev = err_info.get("1", "?")
+        ident = _ERROR_CODES.get(code, "unknown") if isinstance(code, int) else "?"
         rows.append((
             "ERROR",
-            f"sev={sev} code={code} ({code:#010x})  «{msg}»"
+            f"{ident} sev={sev} code={code} ({code:#010x})  «{str(msg)[:30]}»"
             if isinstance(code, int) else f"sev={sev} {err_info!r}",
-            "48.1.*.2",
+            "48.1.*.2 / base.1",
         ))
     else:
         rows.append(("Error", "none", "48.1.*.2"))
@@ -418,29 +432,50 @@ def _decode_state(
         rows.append(("Timestamp (ms)", str(ts36), "36"))
         consumed_base.add("36")
 
-    # working_status: room queue + current room + cleaning telemetry
+    # working_status: room queue (with completion flags) + current
+    # room + cleaning telemetry. ws.5[i].4 = 1 marks a finished room.
     wf5 = ws.get("5") if isinstance(ws, dict) else None
+    queue_entries: list[dict[str, Any]] = []
     if isinstance(wf5, list):
-        rooms = [str(e.get("1")) for e in wf5 if isinstance(e, dict)]
-        rows.append(("Room queue", ", ".join(rooms) or "-", "ws.5"))
+        queue_entries = [e for e in wf5 if isinstance(e, dict)]
     elif isinstance(wf5, dict):
-        rows.append(("Room queue", str(wf5.get("1")), "ws.5"))
+        queue_entries = [wf5]
+    if queue_entries:
+        rendered = [
+            f"{e.get('1')}{'✓' if e.get('4') == 1 else ''}"
+            for e in queue_entries
+        ]
+        rows.append(("Room queue", ", ".join(rendered), "ws.5 (✓=done)"))
+        done = [str(e.get("1")) for e in queue_entries if e.get("4") == 1]
+        rows.append(("Rooms done", ", ".join(done) or "-", "ws.5[*].4=1"))
     else:
         rows.append(("Room queue", "-", "ws.5"))
+        rows.append(("Rooms done", "-", "ws.5[*].4=1"))
     consumed_ws.add("5")
 
     cur = ws.get("6")
     rows.append(("Current room", str(cur) if cur is not None else "-", "ws.6"))
     consumed_ws.add("6")
 
-    # Cleaning area (cm² → m²) and elapsed time (seconds)
-    if "13" in ws:
+    # Flow 2: progress % (ws.1 float32) + cleaned area m² (ws.2 float32).
+    # Field 13 is a constant 18000 there, so prefer the float values.
+    progress = _f32(ws.get("1")) if "1" in ws else None
+    if progress is not None and 0 <= progress <= 200:
+        rows.append(("Cleaning progress", f"{progress:.1f} %", "ws.1 (float32)"))
+        consumed_ws.add("1")
+    area = _f32(ws.get("2")) if "2" in ws else None
+    if area is not None and 0 <= area <= 10000:
+        rows.append(("Clean area", f"{area:.2f} m²", "ws.2 (float32)"))
+        consumed_ws.add("2")
+    elif "13" in ws:
+        # Flow 1 fallback (cm²)
         try:
             area_m2 = int(ws["13"]) / 10000
-            rows.append(("Clean area", f"{area_m2:.2f} m²", "ws.13"))
+            rows.append(("Clean area (legacy)", f"{area_m2:.2f} m²", "ws.13"))
         except (ValueError, TypeError):
             pass
         consumed_ws.add("13")
+
     if "3" in ws:
         rows.append(("Elapsed", f"{ws['3']} s", "ws.3"))
         consumed_ws.add("3")

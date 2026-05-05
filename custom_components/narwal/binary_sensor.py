@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import NarwalConfigEntry
 from .coordinator import NarwalCoordinator
 from .entity import NarwalEntity
+from .narwal_client import ERROR_CODES
 
 
 async def async_setup_entry(
@@ -80,6 +81,7 @@ class NarwalActiveErrorSensor(NarwalEntity, BinarySensorEntity):
         return {
             "code": state.error_code,
             "code_hex": f"0x{state.error_code:08x}",
+            "identifier": ERROR_CODES.get(state.error_code, "unknown"),
             "severity": state.error_severity,
             "message": state.error_message,
         }

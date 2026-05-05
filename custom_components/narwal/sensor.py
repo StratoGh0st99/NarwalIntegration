@@ -43,11 +43,26 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         translation_key="cleaning_area",
         native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
         state_class=SensorStateClass.MEASUREMENT,
-        # working_status field 13 is cm²; divide by 10000 for m².
-        # NEEDS LIVE VALIDATION: only populated during active cleaning.
-        value_fn=lambda state: round(state.cleaning_area / 10000, 2)
-        if state.cleaning_area > 0
-        else None,
+        # Flow 2 broadcasts the live area in m² as float32 in ws.2;
+        # field 13 is a constant 18000 there. Fall back to the legacy
+        # cm²-based field for older models that don't populate ws.2.
+        value_fn=lambda state: (
+            round(state.cleaning_area_m2, 2) if state.cleaning_area_m2 > 0
+            else round(state.cleaning_area / 10000, 2) if state.cleaning_area > 0
+            else None
+        ),
+    ),
+    NarwalSensorEntityDescription(
+        key="cleaning_progress",
+        translation_key="cleaning_progress",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        # ws.1 as float32 — % of the active clean completed (Flow 2).
+        # Stays 0 outside an active clean, so we hide it then.
+        value_fn=lambda state: (
+            round(state.cleaning_progress_pct, 1)
+            if state.cleaning_progress_pct > 0 else None
+        ),
     ),
     NarwalSensorEntityDescription(
         key="cleaning_time",

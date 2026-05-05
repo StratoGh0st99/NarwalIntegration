@@ -564,9 +564,22 @@ class NarwalState:
     # Position (from map data)
     position: Position | None = None
 
-    # Cleaning stats
-    cleaning_area: int = 0  # cm²
+    # Cleaning stats. Two separate sources:
+    #   * Flow 1: working_status field 13 in cm² (legacy upstream code).
+    #   * Flow 2: working_status fields 1 and 2 carry float32 progress % and
+    #     cleaned-area m² (live captures). Prefer the Flow 2 fields when
+    #     populated; fall back to the legacy cm² value otherwise. Field 13
+    #     is a constant (18000) on Flow 2 and never the actual area.
+    cleaning_area: int = 0  # legacy: working_status.13 in cm² (Flow 1)
+    cleaning_area_m2: float = 0.0  # live: working_status.2 as float32 m² (Flow 2)
+    cleaning_progress_pct: float = 0.0  # live: working_status.1 as float32 % (Flow 2)
     cleaning_time: int = 0  # seconds
+
+    # Rooms reported as completed within the active clean.
+    # Derived from working_status.5 — each entry that gains sub-field
+    # 4 = 1 has been finished. Empty list when not cleaning or all
+    # rooms still pending.
+    rooms_completed: list[int] = field(default_factory=list)
 
     # Map
     map_data: MapData | None = None
@@ -679,11 +692,14 @@ class NarwalState:
     def update_from_working_status(self, decoded: dict[str, Any]) -> None:
         """Update state from a decoded working_status message.
 
-        Confirmed via 35-min monitor capture (2026-02-27):
-          Field 3  = current session elapsed time (seconds)
-                     (confirmed: 2136→2159 over 35-min clean)
-          Field 13 = cleaning area (cm²) — CONFIRMED (18000 = 1.8m²)
-          Field 15 = 600 during cleaning (purpose uncertain)
+        Field 3   = current session elapsed time in seconds (Flow 1).
+        Field 13  = legacy area in cm² (Flow 1 — constant 18000 on Flow 2).
+        Field 1   = float32 cleaning progress percent (Flow 2, live).
+        Field 2   = float32 cleaned area in m² (Flow 2, live).
+        Field 5   = list of room entries; sub-field 4 = 1 marks a room as
+                    completed (Flow 2, live).
+        Field 6   = current room id being cleaned (Flow 2, live).
+        Field 15  = 600 during cleaning, purpose uncertain.
         """
         self.raw_working_status = decoded
         if "3" in decoded:
@@ -693,6 +709,29 @@ class NarwalState:
                 pass
         if "13" in decoded:
             self.cleaning_area = int(decoded["13"])
+        # Flow 2: float32 progress and area encoded as fixed32 ints.
+        progress = _to_float32(decoded.get("1"))
+        if progress is not None and 0 <= progress <= 200:
+            self.cleaning_progress_pct = progress
+        area = _to_float32(decoded.get("2"))
+        if area is not None and 0 <= area <= 10000:
+            self.cleaning_area_m2 = area
+        # Track which rooms in the queue have been completed.
+        rooms = decoded.get("5")
+        completed: list[int] = []
+        if isinstance(rooms, list):
+            for entry in rooms:
+                if isinstance(entry, dict) and entry.get("4") == 1:
+                    try:
+                        completed.append(int(entry.get("1", 0)))
+                    except (ValueError, TypeError):
+                        pass
+        elif isinstance(rooms, dict) and rooms.get("4") == 1:
+            try:
+                completed.append(int(rooms.get("1", 0)))
+            except (ValueError, TypeError):
+                pass
+        self.rooms_completed = completed
         if "15" in decoded:
             # Field 15 may be cumulative time; prefer field 3 for current session
             pass
@@ -759,15 +798,18 @@ class NarwalState:
         elif isinstance(f48_1, dict):
             f48_entries = [f48_1]
 
-        # 48.1.*.2 = active error struct, empty {} when no error.
-        # Live-confirmed via a tank-empty fault on Flow 2:
-        #   {1: severity, 2: code, 3: localized_message}
-        # Reset to defaults when error clears or field is absent.
+        # Active error. The robot reports one through two channels:
+        #   * 48.1.*.2 = {1: severity, 2: code, 3: localized_message}
+        #   * field 1 = {1: code, 2: severity, 3: formatted_message}
+        # Field 1 also carries the formatted "错误码:0xCCSSRRXX\n等级:..."
+        # banner string. Either or both can be populated; whichever
+        # appears first wins. Empty/absent on both = no active error.
         err = next(
             (e["2"] for e in f48_entries
              if isinstance(e.get("2"), dict) and e["2"]),
             None,
         )
+        f1 = decoded.get("1")
         if isinstance(err, dict) and err:
             try:
                 self.error_severity = int(err.get("1", 0))
@@ -778,6 +820,21 @@ class NarwalState:
             except (ValueError, TypeError):
                 self.error_code = 0
             raw_msg = err.get("3", "")
+            if isinstance(raw_msg, bytes):
+                self.error_message = raw_msg.decode("utf-8", errors="replace")
+            else:
+                self.error_message = str(raw_msg)
+        elif isinstance(f1, dict) and f1:
+            # Secondary channel — note the swapped fields: 1 is the code.
+            try:
+                self.error_code = int(f1.get("1", 0))
+            except (ValueError, TypeError):
+                self.error_code = 0
+            try:
+                self.error_severity = int(f1.get("2", 0))
+            except (ValueError, TypeError):
+                self.error_severity = 0
+            raw_msg = f1.get("3", "")
             if isinstance(raw_msg, bytes):
                 self.error_message = raw_msg.decode("utf-8", errors="replace")
             else:

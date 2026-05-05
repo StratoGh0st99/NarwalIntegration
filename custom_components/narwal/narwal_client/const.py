@@ -193,6 +193,17 @@ class MopHumidity(IntEnum):
     WET = 2
 
 
+# Known error codes (Flow 2). Codes are packed as 0xCC SS RR XX
+# (category, sub-category, reserved, specific) and stable across
+# firmware updates. Map each one to a snake_case identifier so
+# automations don't need to depend on the localized message.
+ERROR_CODES: dict[int, str] = {
+    0x01010036: "clean_water_dirty_tank_anomaly",  # 16842806 — dirty water tank issue during mop wash
+    0x01010137: "clean_water_tank_empty",          # 16842807 — clean water tank empty / not installed
+    0x02310031: "robot_lifted",                     # 36765745 — robot picked up / suspended
+}
+
+
 # robot_base_status field numbers
 class BaseStatusField(IntEnum):
     """Field numbers in the robot_base_status protobuf message.

@@ -29,6 +29,9 @@
       "cleaning_area": {
         "name": "Cleaning area"
       },
+      "cleaning_progress": {
+        "name": "Cleaning progress"
+      },
       "cleaning_time": {
         "name": "Cleaning time"
       },
