@@ -43,38 +43,30 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         translation_key="cleaning_area",
         native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
         state_class=SensorStateClass.MEASUREMENT,
-        # Flow 2 broadcasts live area as float32 m² in ws.2. The legacy
-        # ws.13 cm² fallback was removed: it's a stale 18000 constant
-        # on Flow 2 and produced confusing 1.8 m² values. Models that
-        # don't populate ws.2 simply show "unknown" until that's
-        # mapped properly for them.
-        value_fn=lambda state: (
-            round(state.cleaning_area_m2, 2)
-            if state.cleaning_area_m2 > 0 else None
-        ),
+        # Float32 m² from working_status.2 (Flow 2). Reports the last
+        # measured value — sticks at the previous clean's total when
+        # idle, resets when a new clean starts. The legacy ws.13 cm²
+        # fallback was removed: it's a stuck 18000 constant on Flow 2
+        # and produced confusing 1.8 m² values.
+        value_fn=lambda state: round(state.cleaning_area_m2, 2),
     ),
     NarwalSensorEntityDescription(
         key="cleaning_progress",
         translation_key="cleaning_progress",
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
-        # ws.1 as float32 — % of the active clean completed (Flow 2).
-        # Stays 0 outside an active clean, so we hide it then.
-        value_fn=lambda state: (
-            round(state.cleaning_progress_pct, 1)
-            if state.cleaning_progress_pct > 0 else None
-        ),
+        # Float32 % from working_status.1 (Flow 2). 0 when idle.
+        value_fn=lambda state: round(state.cleaning_progress_pct, 1),
     ),
     NarwalSensorEntityDescription(
         key="mop_drying_progress",
         translation_key="mop_drying_progress",
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
-        # ws.8 elapsed seconds / ws.9 target seconds.
-        # Hidden when no drying cycle is active (target == 0).
+        # ws.8 elapsed / ws.9 target. 0 when no cycle is running.
         value_fn=lambda state: (
             round(state.mop_drying_elapsed * 100 / state.mop_drying_target, 1)
-            if state.mop_drying_target > 0 else None
+            if state.mop_drying_target > 0 else 0
         ),
     ),
     NarwalSensorEntityDescription(
@@ -83,12 +75,14 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.SECONDS,
         state_class=SensorStateClass.MEASUREMENT,
-        # Time before the robot's user-action prompt times out.
-        # Hidden when no action is required.
+        entity_category=EntityCategory.DIAGNOSTIC,
+        # Mirrors `remaining_s` from binary_sensor.user_action_required
+        # so it can be graphed / used in automations directly. 0 when
+        # no action is required.
         value_fn=lambda state: (
             max(state.user_action_target - state.user_action_elapsed, 0)
             if state.user_action_type != 0 and state.user_action_target > 0
-            else None
+            else 0
         ),
     ),
     NarwalSensorEntityDescription(
@@ -97,11 +91,8 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.SECONDS,
         state_class=SensorStateClass.MEASUREMENT,
-        # working_status field 3 is session elapsed seconds.
-        # NEEDS LIVE VALIDATION: only populated during active cleaning.
-        value_fn=lambda state: state.cleaning_time
-        if state.cleaning_time > 0
-        else None,
+        # working_status.3 — session elapsed seconds. 0 when idle.
+        value_fn=lambda state: state.cleaning_time,
     ),
     NarwalSensorEntityDescription(
         key="firmware_version",
@@ -122,20 +113,18 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         key="error_code",
         translation_key="error_code",
         entity_category=EntityCategory.DIAGNOSTIC,
-        # 0 = no active error. Codes appear to be packed as
-        # 0xCC SS RR XX (category, subcategory, reserved, specific).
-        # Live-confirmed example: 16842807 (0x01010137) = clean-water
-        # tank empty / not installed during mop wash.
-        value_fn=lambda state: state.error_code or None,
+        # Numeric error code; 0 when no fault is active. Codes are
+        # packed as 0xCC SS RR XX (category, sub, reserved, specific).
+        value_fn=lambda state: state.error_code,
     ),
     NarwalSensorEntityDescription(
         key="error_message",
         translation_key="error_message",
         entity_category=EntityCategory.DIAGNOSTIC,
-        # Localized message string broadcast alongside the error code.
+        # Localized fault message; "" when no fault is active.
         # Locale follows the robot's firmware setting (Chinese on the
         # Flow 2 we tested) — prefer error_code for automations.
-        value_fn=lambda state: state.error_message or None,
+        value_fn=lambda state: state.error_message or "",
     ),
 )
 
