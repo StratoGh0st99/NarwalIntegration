@@ -25,13 +25,6 @@ from .const import (
     TOPIC_CMD_ACTIVE_ROBOT,
     TOPIC_CMD_APP_HEARTBEAT,
     TOPIC_CMD_CANCEL,
-    TOPIC_CMD_REQ_CANCEL,
-    TOPIC_CMD_REQ_FORCE_END,
-    TOPIC_CMD_REQ_MOP_ROOM,
-    TOPIC_CMD_REQ_PAUSE,
-    TOPIC_CMD_REQ_RESUME,
-    TOPIC_CMD_REQ_RETURN_BASE,
-    TOPIC_CMD_REQ_SWEEP_ROOM,
     TOPIC_CMD_DRY_MOP,
     TOPIC_CMD_DUST_GATHERING,
     TOPIC_CMD_EASY_CLEAN,
@@ -1066,71 +1059,21 @@ class NarwalClient:
         }
         return blackboxprotobuf.encode_message(msg, typedef)
 
-    # Product keys that ship the new clean_system/* topic family.
-    # Discovered live via APK string analysis (libapp.so 2026-04-27);
-    # the Flow 2 firmware exposes both the legacy clean/plan/start
-    # path and the richer per-room req_sweep_room_by_plan_params one.
-    _CLEAN_SYSTEM_PRODUCT_KEYS: frozenset[str] = frozenset({"QxMSPG6VSO"})
-
-    def _supports_clean_system(self) -> bool:
-        info = self.state.device_info
-        return bool(info and info.product_key in self._CLEAN_SYSTEM_PRODUCT_KEYS)
-
-    def _build_room_request_payload(self, room_ids: list[int]) -> bytes:
-        """Build a `MapCleanAreaInfoList`-shaped payload for the
-        clean_system/req_sweep_room_by_plan_params topic.
-
-        Field names match the upstream MapCleanParamInfo proto seen
-        in the legacy `clean/plan/start` payloads, but the wrapper is
-        a simple `{1: repeated entries}` instead of the nested
-        whole-house envelope. Defaults: Vacuum and mop, single pass,
-        Standard suction + Standard humidity — the robot uses the
-        per-room values to override its global defaults.
-        """
-        import blackboxprotobuf
-
-        entries = [
-            {"1": rid, "2": 4, "3": 1, "6": 2, "7": 2}
-            for rid in room_ids
-        ]
-        msg = {"1": entries}
-        typedef = {
-            "1": {
-                "type": "message",
-                "seen_repeated": True,
-                "message_typedef": {
-                    "1": {"type": "uint"},
-                    "2": {"type": "int"},
-                    "3": {"type": "int"},
-                    "6": {"type": "int"},
-                    "7": {"type": "int"},
-                },
-            }
-        }
-        return blackboxprotobuf.encode_message(msg, typedef)
-
     async def start_rooms(self, room_ids: list[int]) -> CommandResponse:
         """Start room-specific cleaning.
 
-        Flow 2 (and any other model that exposes the new topic family)
-        sends to `clean_system/req_sweep_room_by_plan_params` with
-        per-room MapCleanAreaInfo entries — the legacy
-        `clean/plan/start` path silently ignored room IDs and ran a
-        whole-house clean (#25). Older models keep the original
-        envelope-on-clean/plan/start path.
+        Sends clean/plan/start with room IDs in the CleanTask payload.
+        Uses same topic as whole-house clean but with room selection data
+        in field 1.2 (empty for whole-house, populated for room-specific).
 
         Args:
             room_ids: List of room IDs from RoomInfo.room_id.
+
+        Returns:
+            CommandResponse with result code.
         """
         if not room_ids:
             return await self.start()
-        if self._supports_clean_system():
-            payload = self._build_room_request_payload(room_ids)
-            return await self.send_command(
-                TOPIC_CMD_REQ_SWEEP_ROOM,
-                payload=payload,
-                timeout=10.0,
-            )
         payload = self._build_room_clean_payload(room_ids)
         return await self.send_command(
             TOPIC_CMD_START_CLEAN,
@@ -1143,49 +1086,28 @@ class NarwalClient:
         return await self.send_command(TOPIC_CMD_EASY_CLEAN)
 
     async def pause(self) -> CommandResponse:
-        """Pause current task. Flow 2 uses the clean_system topic."""
-        topic = (
-            TOPIC_CMD_REQ_PAUSE if self._supports_clean_system()
-            else TOPIC_CMD_PAUSE
-        )
-        return await self.send_command(topic)
+        """Pause current task."""
+        return await self.send_command(TOPIC_CMD_PAUSE)
 
     async def resume(self, timeout: float = COMMAND_RESPONSE_TIMEOUT) -> CommandResponse:
-        """Resume paused task. Flow 2 uses the clean_system topic."""
-        topic = (
-            TOPIC_CMD_REQ_RESUME if self._supports_clean_system()
-            else TOPIC_CMD_RESUME
-        )
-        return await self.send_command(topic, timeout=timeout)
+        """Resume paused task."""
+        return await self.send_command(TOPIC_CMD_RESUME, timeout=timeout)
 
     async def stop(self, timeout: float = 15.0) -> CommandResponse:
         """Force-stop current task.
 
         Note: force_end is slow — robot physically stops before responding.
         Previous testing shows 10-15s response times from CLEANING state.
-        Flow 2 uses the clean_system topic.
         """
-        topic = (
-            TOPIC_CMD_REQ_FORCE_END if self._supports_clean_system()
-            else TOPIC_CMD_FORCE_END
-        )
-        return await self.send_command(topic, timeout=timeout)
+        return await self.send_command(TOPIC_CMD_FORCE_END, timeout=timeout)
 
     async def cancel(self) -> CommandResponse:
-        """Cancel current task. Flow 2 uses the clean_system topic."""
-        topic = (
-            TOPIC_CMD_REQ_CANCEL if self._supports_clean_system()
-            else TOPIC_CMD_CANCEL
-        )
-        return await self.send_command(topic)
+        """Cancel current task."""
+        return await self.send_command(TOPIC_CMD_CANCEL)
 
     async def return_to_base(self, timeout: float = COMMAND_RESPONSE_TIMEOUT) -> CommandResponse:
-        """Return to charging dock. Flow 2 uses the clean_system topic."""
-        topic = (
-            TOPIC_CMD_REQ_RETURN_BASE if self._supports_clean_system()
-            else TOPIC_CMD_RECALL
-        )
-        return await self.send_command(topic, timeout=timeout)
+        """Return to charging dock."""
+        return await self.send_command(TOPIC_CMD_RECALL, timeout=timeout)
 
     async def set_fan_speed(self, level: FanLevel | int) -> CommandResponse:
         """Set suction fan speed.
