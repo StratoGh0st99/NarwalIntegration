@@ -429,6 +429,15 @@ class NarwalClient:
                 self.state.map_display_data.robot_y,
                 self.state.map_display_data.timestamp,
             )
+        elif short_topic == "status/point_navi_plan_traj":
+            self.state.update_from_plan_traj(decoded)
+        elif short_topic == "report/clean_report":
+            # Empty-payload event marker: the robot finished a cycle.
+            # Reset session-scoped state and log; the coordinator picks
+            # this up via the on_state_update callback and triggers a
+            # fresh map fetch.
+            self.state.last_clean_report_ts = time.time()
+            _LOGGER.info("clean_report received — clean cycle complete")
         if self.on_state_update:
             self.on_state_update(self.state)
 
@@ -866,6 +875,10 @@ class NarwalClient:
                 self.state.update_from_download_status(decoded)
             elif short_topic == "map/display_map":
                 self.state.map_display_data = MapDisplayData.from_broadcast(decoded)
+            elif short_topic == "status/point_navi_plan_traj":
+                self.state.update_from_plan_traj(decoded)
+            elif short_topic == "report/clean_report":
+                self.state.last_clean_report_ts = time.time()
 
         raise NarwalCommandError(
             f"No field5 response within {timeout}s"

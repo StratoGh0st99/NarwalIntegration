@@ -655,6 +655,14 @@ class NarwalState:
     raw_base_status: dict[str, Any] = field(default_factory=dict)
     raw_working_status: dict[str, Any] = field(default_factory=dict)
 
+    # Forward path the robot is about to drive — list of (x, y) world
+    # coordinates decoded from status/point_navi_plan_traj. Empty list
+    # when the robot is idle or no path is currently planned.
+    plan_trajectory: list[tuple[float, float]] = field(default_factory=list)
+    # Wall-clock timestamp of the most recent report/clean_report event
+    # (empty-payload broadcast that fires once at end of a clean cycle).
+    last_clean_report_ts: float = 0.0
+
     @property
     def is_cleaning(self) -> bool:
         """True when actively cleaning (not paused, not returning to dock)."""
@@ -722,23 +730,31 @@ class NarwalState:
     def update_from_working_status(self, decoded: dict[str, Any]) -> None:
         """Update state from a decoded working_status message.
 
-        Field 3   = current session elapsed time in seconds (Flow 1).
-        Field 13  = legacy area in cm² (Flow 1 — constant 18000 on Flow 2).
-        Field 1   = float32 cleaning progress percent (Flow 2, live).
-        Field 2   = float32 cleaned area in m² (Flow 2, live).
-        Field 5   = list of room entries; sub-field 4 = 1 marks a room as
-                    completed (Flow 2, live).
-        Field 6   = current room id being cleaned (Flow 2, live).
-        Field 15  = 600 during cleaning, purpose uncertain.
+        Field semantics (re-verified 2026-05 with full Wohnzimmer-Clean
+        capture — earlier mapping had cleaning_time on field 3, which is
+        actually the WorkingStatus enum):
+
+        Field 1   = float32 cleaning progress percent
+        Field 2   = float32 cleaned area in m²
+        Field 3   = WorkingStatus enum (status code, not seconds)
+        Field 5   = list of {1: roomId, 2: completed_flag}; flag == 2
+                    means the room is done. Earlier code used sub-field
+                    4 which never appears in current firmware.
+        Field 6   = index of the room currently being cleaned
+        Field 12  = elapsed seconds for the current session
+        Field 13  = legacy area in cm² (Flow 1 only — constant 18000
+                    on Flow 2, ignored)
+        Field 15  = 600 during cleaning, purpose uncertain
         """
         self.raw_working_status = decoded
-        if "3" in decoded:
+        # cleaning_time: prefer field 12 (real elapsed seconds). Field 3
+        # is the WorkingStatus enum and was the source of a previous bug
+        # where the "Cleaning time" sensor showed status codes.
+        if "12" in decoded:
             try:
-                self.cleaning_time = int(decoded["3"])
+                self.cleaning_time = int(decoded["12"])
             except (ValueError, TypeError):
                 pass
-        if "13" in decoded:
-            self.cleaning_area = int(decoded["13"])
         # Flow 2: float32 progress and area encoded as fixed32 ints.
         progress = _to_float32(decoded.get("1"))
         if progress is not None and 0 <= progress <= 200:
@@ -749,14 +765,18 @@ class NarwalState:
         # Track which rooms in the queue have been completed.
         rooms = decoded.get("5")
         completed: list[int] = []
+        # Each entry is {1: roomId, 2: completion_flag}. Observed values
+        # for flag: missing (queued), 1 (in progress), 2 (done). Earlier
+        # code looked at sub-field 4 which was never populated in any
+        # capture we have.
         if isinstance(rooms, list):
             for entry in rooms:
-                if isinstance(entry, dict) and entry.get("4") == 1:
+                if isinstance(entry, dict) and entry.get("2") == 2:
                     try:
                         completed.append(int(entry.get("1", 0)))
                     except (ValueError, TypeError):
                         pass
-        elif isinstance(rooms, dict) and rooms.get("4") == 1:
+        elif isinstance(rooms, dict) and rooms.get("2") == 2:
             try:
                 completed.append(int(rooms.get("1", 0)))
             except (ValueError, TypeError):
@@ -994,6 +1014,29 @@ class NarwalState:
             self.battery_health = int(decoded["38"])
         if "36" in decoded:
             self.timestamp = int(decoded["36"])
+
+    def update_from_plan_traj(self, decoded: dict[str, Any]) -> None:
+        """Update state from a status/point_navi_plan_traj broadcast.
+
+        Field 1 is a repeated list of {1: x, 2: y} where each coordinate
+        is a float32 packed into a fixed32 int (same encoding as the
+        battery and area fields elsewhere in the protocol).
+
+        Empty / missing field 1 → robot has no planned path → clear the
+        cached trajectory. Bad encodings are dropped silently rather
+        than poisoning the whole list.
+        """
+        points: list[tuple[float, float]] = []
+        raw = decoded.get("1")
+        if isinstance(raw, list):
+            for entry in raw:
+                if not isinstance(entry, dict):
+                    continue
+                x = _to_float32(entry.get("1"))
+                y = _to_float32(entry.get("2"))
+                if x is not None and y is not None:
+                    points.append((x, y))
+        self.plan_trajectory = points
 
     def update_from_upgrade_status(self, decoded: dict[str, Any]) -> None:
         """Update state from a decoded upgrade_status message."""

@@ -17,12 +17,19 @@ try:
 except ImportError:
     Segment = None  # HA < 2026.3 — room cleaning unavailable
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .narwal_client import CommandResult, FanLevel, NarwalCommandError, WorkingStatus
 
 from . import NarwalConfigEntry
-from .const import FAN_SPEED_LIST, FAN_SPEED_MAP
+from .const import CONF_PRODUCT_KEY, FAN_SPEED_LIST, FAN_SPEED_MAP
+
+# Product keys whose firmware routes single-room cleaning exclusively
+# through Tuya cloud MQTT — the local WS:9002 server does not accept
+# the clean_system/* topic family. Confirmed by capturing zero traffic
+# on the local socket while the official app triggered a room clean.
+_CLOUD_ONLY_ROOM_CLEAN: frozenset[str] = frozenset({"QxMSPG6VSO"})
 from .coordinator import NarwalCoordinator
 from .entity import NarwalEntity
 
@@ -258,6 +265,13 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         Converts string segment IDs back to integer room IDs and sends
         a room-specific clean command to the robot.
         """
+        product_key = self.coordinator.config_entry.data.get(CONF_PRODUCT_KEY, "")
+        if product_key in _CLOUD_ONLY_ROOM_CLEAN:
+            raise HomeAssistantError(
+                "Single-room cleaning is not supported on this model via the "
+                "local connection — it is routed through the Narwal cloud. "
+                "Use the official Narwal app, or trigger a whole-house clean."
+            )
         await self._ensure_awake()
         room_ids = [int(sid) for sid in segment_ids]
         _LOGGER.info("Starting room-specific clean: rooms=%s", room_ids)
