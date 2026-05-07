@@ -542,17 +542,32 @@ class NarwalState:
     error_severity: int = 0
     error_message: str = ""
 
-    # Station activity flags. Field 48.1 can be a single message or a
-    # repeated list when multiple dock activities run in parallel
-    # (e.g. mop drying + dust emptying). Each entry uses an empty
-    # marker sub-field to signal which activity it represents:
-    #   .10 = dust-bag emptying
-    #   .15 = mop drying
+    # Station activity flags. Field 48.1 is a (possibly-repeated) list
+    # of currently-active dock tasks. Each entry uses an empty marker
+    # sub-field to identify the task type. Sub-keys verified by capture:
+    #   .10 = dust-bag drying (NOT dust emptying — earlier guess)
+    #   .13 = mop drying
+    #   .14 = dust-cabinet disinfection
+    # Entries without a `1` field are running; `1: 1` marks paused.
     # WorkingStatus 17 / 19 also indicate mop-drying phases when the
-    # robot is the actor. We surface both signals — see
-    # NarwalStationActivitySensor for the priority logic.
-    station_dust_emptying: bool = False
+    # robot itself is the actor — see NarwalStationActivitySensor.
+    station_dust_bag_drying: bool = False
     station_mop_drying: bool = False
+    station_dust_disinfecting: bool = False
+    # Kept for backwards compatibility while sensors transition. Always
+    # False under the corrected mapping — real "dust emptying" sub-key
+    # has not yet been observed in capture.
+    station_dust_emptying: bool = False
+
+    # Disinfection timer. ws.10 = elapsed seconds, ws.11 = target
+    # seconds (constant 2700 = 45 min in observed firmware). Both 0
+    # when disinfection is not running. Earlier we considered these
+    # generic dock-activity fields — they're disinfection-specific:
+    # ws.10/ws.11 vanish from the working_status broadcast as soon as
+    # the disinfection cycle ends, even while dust-bag drying is still
+    # active. No timer for bag drying has been identified yet.
+    dust_disinfection_elapsed: int = 0
+    dust_disinfection_target: int = 0
 
     # Device identity
     device_info: DeviceInfo | None = None
@@ -791,6 +806,17 @@ class NarwalState:
             self.mop_drying_target = int(decoded.get("9", 0) or 0)
         except (ValueError, TypeError):
             self.mop_drying_target = 0
+        # Disinfection timer (ws.10 elapsed / ws.11 target). The fields
+        # are absent from the broadcast when no disinfection cycle is
+        # running — `.get("10", 0)` resolves to 0 in that case.
+        try:
+            self.dust_disinfection_elapsed = int(decoded.get("10", 0) or 0)
+        except (ValueError, TypeError):
+            self.dust_disinfection_elapsed = 0
+        try:
+            self.dust_disinfection_target = int(decoded.get("11", 0) or 0)
+        except (ValueError, TypeError):
+            self.dust_disinfection_target = 0
         # ws.22 = user-action countdown ({1: elapsed, 2: target}). Empty
         # dict when no action is required.
         f22 = decoded.get("22")
@@ -918,10 +944,15 @@ class NarwalState:
             self.error_severity = 0
             self.error_message = ""
 
-        # Station-activity markers within 48.1.*. Empty `{}` flags signal
-        # which dock activity each entry represents (live-observed).
-        self.station_dust_emptying = any("10" in e for e in f48_entries)
-        self.station_mop_drying = any("15" in e for e in f48_entries)
+        # Station-activity markers within 48.1.*. Each entry carries an
+        # empty `{}` sub-field whose key identifies the task type. See
+        # the field declarations above for the verified key map.
+        self.station_dust_bag_drying = any("10" in e for e in f48_entries)
+        self.station_mop_drying = any("13" in e for e in f48_entries)
+        self.station_dust_disinfecting = any("14" in e for e in f48_entries)
+        # No sub-key for actual dust-bin emptying observed yet — leave
+        # the legacy flag wired off.
+        self.station_dust_emptying = False
         # Field 47 = dock indicator (3=docked, 2=undocked)
         if "47" in decoded:
             try:

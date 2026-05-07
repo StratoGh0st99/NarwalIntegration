@@ -36,6 +36,9 @@
       "mop_drying_progress": {
         "name": "Mop drying progress"
       },
+      "dust_disinfection_progress": {
+        "name": "Dust disinfection progress"
+      },
       "cleaning_time": {
         "name": "Cleaning time"
       },
@@ -59,7 +62,8 @@
           "idle": "Idle",
           "mop_washing": "Mop washing",
           "mop_drying": "Mop drying",
-          "dust_emptying": "Dust emptying"
+          "dust_bag_drying": "Dust bag drying",
+          "dust_disinfection": "Dust cabinet disinfection"
         }
       },
       "error_code": {

@@ -70,6 +70,18 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         ),
     ),
     NarwalSensorEntityDescription(
+        key="dust_disinfection_progress",
+        translation_key="dust_disinfection_progress",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        # ws.10 elapsed / ws.11 target (constant 2700 = 45 min). 0
+        # when no disinfection cycle is running.
+        value_fn=lambda state: (
+            round(state.dust_disinfection_elapsed * 100 / state.dust_disinfection_target, 1)
+            if state.dust_disinfection_target > 0 else 0
+        ),
+    ),
+    NarwalSensorEntityDescription(
         key="user_action_seconds_left",
         translation_key="user_action_seconds_left",
         device_class=SensorDeviceClass.DURATION,
@@ -219,7 +231,10 @@ class NarwalStationActivitySensor(NarwalEntity, SensorEntity):
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_translation_key = "station_activity"
-    _attr_options = ["idle", "mop_washing", "mop_drying", "dust_emptying"]
+    _attr_options = [
+        "idle", "mop_washing", "mop_drying",
+        "dust_bag_drying", "dust_disinfection",
+    ]
     _attr_icon = "mdi:dishwasher"
 
     def __init__(self, coordinator: NarwalCoordinator) -> None:
@@ -236,13 +251,17 @@ class NarwalStationActivitySensor(NarwalEntity, SensorEntity):
         # with the basin so other activities can't really overlap.
         if state.working_status == WorkingStatus.MOP_WASHING:
             return "mop_washing"
-        if (
-            state.station_mop_drying
-            or state.working_status in (
-                WorkingStatus.MOP_DRYING, WorkingStatus.MOP_DRYING_ACTIVE,
-            )
-        ):
+        # Trust the field 48 sub-key signals exclusively for dock-side
+        # activities. Earlier code used WorkingStatus 17 / 19 as a
+        # fallback for mop_drying, but capture showed the firmware sets
+        # working_status = 19 even during dust-bag drying — that
+        # mislabelled bag-drying cycles as mop_drying. The sub-keys are
+        # specific (10 = bag drying, 13 = mop drying, 14 = disinfection)
+        # and reliable.
+        if state.station_mop_drying:
             return "mop_drying"
-        if state.station_dust_emptying:
-            return "dust_emptying"
+        if state.station_dust_disinfecting:
+            return "dust_disinfection"
+        if state.station_dust_bag_drying:
+            return "dust_bag_drying"
         return "idle"

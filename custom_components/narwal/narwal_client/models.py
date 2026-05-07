@@ -542,17 +542,32 @@ class NarwalState:
     error_severity: int = 0
     error_message: str = ""
 
-    # Station activity flags. Field 48.1 can be a single message or a
-    # repeated list when multiple dock activities run in parallel
-    # (e.g. mop drying + dust emptying). Each entry uses an empty
-    # marker sub-field to signal which activity it represents:
-    #   .10 = dust-bag emptying
-    #   .15 = mop drying
+    # Station activity flags. Field 48.1 is a (possibly-repeated) list
+    # of currently-active dock tasks. Each entry uses an empty marker
+    # sub-field to identify the task type. Sub-keys verified by capture:
+    #   .10 = dust-bag drying (NOT dust emptying — earlier guess)
+    #   .13 = mop drying
+    #   .14 = dust-cabinet disinfection
+    # Entries without a `1` field are running; `1: 1` marks paused.
     # WorkingStatus 17 / 19 also indicate mop-drying phases when the
-    # robot is the actor. We surface both signals — see
-    # NarwalStationActivitySensor for the priority logic.
-    station_dust_emptying: bool = False
+    # robot itself is the actor — see NarwalStationActivitySensor.
+    station_dust_bag_drying: bool = False
     station_mop_drying: bool = False
+    station_dust_disinfecting: bool = False
+    # Kept for backwards compatibility while sensors transition. Always
+    # False under the corrected mapping — real "dust emptying" sub-key
+    # has not yet been observed in capture.
+    station_dust_emptying: bool = False
+
+    # Disinfection timer. ws.10 = elapsed seconds, ws.11 = target
+    # seconds (constant 2700 = 45 min in observed firmware). Both 0
+    # when disinfection is not running. Earlier we considered these
+    # generic dock-activity fields — they're disinfection-specific:
+    # ws.10/ws.11 vanish from the working_status broadcast as soon as
+    # the disinfection cycle ends, even while dust-bag drying is still
+    # active. No timer for bag drying has been identified yet.
+    dust_disinfection_elapsed: int = 0
+    dust_disinfection_target: int = 0
 
     # Device identity
     device_info: DeviceInfo | None = None
@@ -655,6 +670,14 @@ class NarwalState:
     raw_base_status: dict[str, Any] = field(default_factory=dict)
     raw_working_status: dict[str, Any] = field(default_factory=dict)
 
+    # Forward path the robot is about to drive — list of (x, y) world
+    # coordinates decoded from status/point_navi_plan_traj. Empty list
+    # when the robot is idle or no path is currently planned.
+    plan_trajectory: list[tuple[float, float]] = field(default_factory=list)
+    # Wall-clock timestamp of the most recent report/clean_report event
+    # (empty-payload broadcast that fires once at end of a clean cycle).
+    last_clean_report_ts: float = 0.0
+
     @property
     def is_cleaning(self) -> bool:
         """True when actively cleaning (not paused, not returning to dock)."""
@@ -722,23 +745,31 @@ class NarwalState:
     def update_from_working_status(self, decoded: dict[str, Any]) -> None:
         """Update state from a decoded working_status message.
 
-        Field 3   = current session elapsed time in seconds (Flow 1).
-        Field 13  = legacy area in cm² (Flow 1 — constant 18000 on Flow 2).
-        Field 1   = float32 cleaning progress percent (Flow 2, live).
-        Field 2   = float32 cleaned area in m² (Flow 2, live).
-        Field 5   = list of room entries; sub-field 4 = 1 marks a room as
-                    completed (Flow 2, live).
-        Field 6   = current room id being cleaned (Flow 2, live).
-        Field 15  = 600 during cleaning, purpose uncertain.
+        Field semantics (re-verified 2026-05 with full Wohnzimmer-Clean
+        capture — earlier mapping had cleaning_time on field 3, which is
+        actually the WorkingStatus enum):
+
+        Field 1   = float32 cleaning progress percent
+        Field 2   = float32 cleaned area in m²
+        Field 3   = WorkingStatus enum (status code, not seconds)
+        Field 5   = list of {1: roomId, 2: completed_flag}; flag == 2
+                    means the room is done. Earlier code used sub-field
+                    4 which never appears in current firmware.
+        Field 6   = index of the room currently being cleaned
+        Field 12  = elapsed seconds for the current session
+        Field 13  = legacy area in cm² (Flow 1 only — constant 18000
+                    on Flow 2, ignored)
+        Field 15  = 600 during cleaning, purpose uncertain
         """
         self.raw_working_status = decoded
-        if "3" in decoded:
+        # cleaning_time: prefer field 12 (real elapsed seconds). Field 3
+        # is the WorkingStatus enum and was the source of a previous bug
+        # where the "Cleaning time" sensor showed status codes.
+        if "12" in decoded:
             try:
-                self.cleaning_time = int(decoded["3"])
+                self.cleaning_time = int(decoded["12"])
             except (ValueError, TypeError):
                 pass
-        if "13" in decoded:
-            self.cleaning_area = int(decoded["13"])
         # Flow 2: float32 progress and area encoded as fixed32 ints.
         progress = _to_float32(decoded.get("1"))
         if progress is not None and 0 <= progress <= 200:
@@ -749,14 +780,18 @@ class NarwalState:
         # Track which rooms in the queue have been completed.
         rooms = decoded.get("5")
         completed: list[int] = []
+        # Each entry is {1: roomId, 2: completion_flag}. Observed values
+        # for flag: missing (queued), 1 (in progress), 2 (done). Earlier
+        # code looked at sub-field 4 which was never populated in any
+        # capture we have.
         if isinstance(rooms, list):
             for entry in rooms:
-                if isinstance(entry, dict) and entry.get("4") == 1:
+                if isinstance(entry, dict) and entry.get("2") == 2:
                     try:
                         completed.append(int(entry.get("1", 0)))
                     except (ValueError, TypeError):
                         pass
-        elif isinstance(rooms, dict) and rooms.get("4") == 1:
+        elif isinstance(rooms, dict) and rooms.get("2") == 2:
             try:
                 completed.append(int(rooms.get("1", 0)))
             except (ValueError, TypeError):
@@ -771,6 +806,17 @@ class NarwalState:
             self.mop_drying_target = int(decoded.get("9", 0) or 0)
         except (ValueError, TypeError):
             self.mop_drying_target = 0
+        # Disinfection timer (ws.10 elapsed / ws.11 target). The fields
+        # are absent from the broadcast when no disinfection cycle is
+        # running — `.get("10", 0)` resolves to 0 in that case.
+        try:
+            self.dust_disinfection_elapsed = int(decoded.get("10", 0) or 0)
+        except (ValueError, TypeError):
+            self.dust_disinfection_elapsed = 0
+        try:
+            self.dust_disinfection_target = int(decoded.get("11", 0) or 0)
+        except (ValueError, TypeError):
+            self.dust_disinfection_target = 0
         # ws.22 = user-action countdown ({1: elapsed, 2: target}). Empty
         # dict when no action is required.
         f22 = decoded.get("22")
@@ -898,10 +944,15 @@ class NarwalState:
             self.error_severity = 0
             self.error_message = ""
 
-        # Station-activity markers within 48.1.*. Empty `{}` flags signal
-        # which dock activity each entry represents (live-observed).
-        self.station_dust_emptying = any("10" in e for e in f48_entries)
-        self.station_mop_drying = any("15" in e for e in f48_entries)
+        # Station-activity markers within 48.1.*. Each entry carries an
+        # empty `{}` sub-field whose key identifies the task type. See
+        # the field declarations above for the verified key map.
+        self.station_dust_bag_drying = any("10" in e for e in f48_entries)
+        self.station_mop_drying = any("13" in e for e in f48_entries)
+        self.station_dust_disinfecting = any("14" in e for e in f48_entries)
+        # No sub-key for actual dust-bin emptying observed yet — leave
+        # the legacy flag wired off.
+        self.station_dust_emptying = False
         # Field 47 = dock indicator (3=docked, 2=undocked)
         if "47" in decoded:
             try:
@@ -994,6 +1045,29 @@ class NarwalState:
             self.battery_health = int(decoded["38"])
         if "36" in decoded:
             self.timestamp = int(decoded["36"])
+
+    def update_from_plan_traj(self, decoded: dict[str, Any]) -> None:
+        """Update state from a status/point_navi_plan_traj broadcast.
+
+        Field 1 is a repeated list of {1: x, 2: y} where each coordinate
+        is a float32 packed into a fixed32 int (same encoding as the
+        battery and area fields elsewhere in the protocol).
+
+        Empty / missing field 1 → robot has no planned path → clear the
+        cached trajectory. Bad encodings are dropped silently rather
+        than poisoning the whole list.
+        """
+        points: list[tuple[float, float]] = []
+        raw = decoded.get("1")
+        if isinstance(raw, list):
+            for entry in raw:
+                if not isinstance(entry, dict):
+                    continue
+                x = _to_float32(entry.get("1"))
+                y = _to_float32(entry.get("2"))
+                if x is not None and y is not None:
+                    points.append((x, y))
+        self.plan_trajectory = points
 
     def update_from_upgrade_status(self, decoded: dict[str, Any]) -> None:
         """Update state from a decoded upgrade_status message."""
