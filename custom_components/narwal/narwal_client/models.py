@@ -516,6 +516,44 @@ class NarwalState:
     firmware_version: str = ""
     firmware_target: str = ""
 
+    # Current clean settings (Flow 2 — live-broadcast in robot_base_status).
+    # 0 means "not yet observed" (the robot uses 1-indexed values).
+    #   field 26 = suction (1=Quiet, 2=Standard, 3=Strong, 4=Super powerful)
+    #   field 29 = mop humidity (1=Slightly dry, 2=Standard, 3=Slightly wet)
+    fan_level_raw: int = 0
+    mop_humidity_raw: int = 0
+
+    # Station / consumables. Field 41 is broadcast as a percentage that
+    # tracks dust-bag remaining capacity (100 = healthy/empty bag, drops
+    # toward 0 as it fills). Validated against the app's "Dust bag:
+    # Healthy" indicator at 100. Other tank/solution levels (clean
+    # water, dirty water, cleaning solution, mop pad wear) are not yet
+    # mapped — most appear constant at 1 (=OK) until a fault occurs.
+    dust_bag_health: int = 0
+
+    # Active fault / error. The robot reports a structured error in
+    # robot_base_status field 48.1.2 — empty `{}` when there is no
+    # active error, or `{1: severity, 2: code, 3: localized_message}`
+    # when a fault halts the current task. The message is broadcast in
+    # whatever locale the robot's firmware was set to (Chinese on the
+    # Flow 2 hardware we tested), so consumers should prefer the
+    # numeric code for logic and use the message for display.
+    error_code: int = 0
+    error_severity: int = 0
+    error_message: str = ""
+
+    # Station activity flags. Field 48.1 can be a single message or a
+    # repeated list when multiple dock activities run in parallel
+    # (e.g. mop drying + dust emptying). Each entry uses an empty
+    # marker sub-field to signal which activity it represents:
+    #   .10 = dust-bag emptying
+    #   .15 = mop drying
+    # WorkingStatus 17 / 19 also indicate mop-drying phases when the
+    # robot is the actor. We surface both signals — see
+    # NarwalStationActivitySensor for the priority logic.
+    station_dust_emptying: bool = False
+    station_mop_drying: bool = False
+
     # Device identity
     device_info: DeviceInfo | None = None
 
@@ -526,9 +564,52 @@ class NarwalState:
     # Position (from map data)
     position: Position | None = None
 
-    # Cleaning stats
-    cleaning_area: int = 0  # cm²
+    # Cleaning stats. Two separate sources:
+    #   * Flow 1: working_status field 13 in cm² (legacy upstream code).
+    #   * Flow 2: working_status fields 1 and 2 carry float32 progress % and
+    #     cleaned-area m² (live captures). Prefer the Flow 2 fields when
+    #     populated; fall back to the legacy cm² value otherwise. Field 13
+    #     is a constant (18000) on Flow 2 and never the actual area.
+    cleaning_area: int = 0  # legacy: working_status.13 in cm² (Flow 1)
+    cleaning_area_m2: float = 0.0  # live: working_status.2 as float32 m² (Flow 2)
+    cleaning_progress_pct: float = 0.0  # live: working_status.1 as float32 % (Flow 2)
     cleaning_time: int = 0  # seconds
+
+    # Rooms reported as completed within the active clean.
+    # Derived from working_status.5 — each entry that gains sub-field
+    # 4 = 1 has been finished. Empty list when not cleaning or all
+    # rooms still pending.
+    rooms_completed: list[int] = field(default_factory=list)
+
+    # Mop-drying timer (Flow 2). Live-confirmed by toggling between
+    # drying modes:
+    #   ws.8 = elapsed seconds since the cycle started
+    #   ws.9 = target total seconds for the selected mode
+    #     - 12600 (3.5 h) for default / smart / strong
+    #     - 18000 (5 h)   for silent
+    # Switching modes mid-cycle rescales ws.8 so the percent-complete
+    # stays consistent. Both fields drop to 0 once drying stops.
+    mop_drying_elapsed: int = 0
+    mop_drying_target: int = 0
+
+    # User-action prompt (Flow 2). When the robot needs the user to
+    # do something physical (carry me to dock, refill the tank, etc.)
+    # it broadcasts a structured prompt and starts a countdown. Empty
+    # / 0 when nothing is required:
+    #   user_action_type    = base.3.16 (2=fill tank, 3=return after
+    #                         clean, 4=return before clean — observed)
+    #   user_action_elapsed = ws.22.1 — seconds the user has been
+    #                         asked already
+    #   user_action_target  = ws.22.2 — timeout in seconds (600 / 3600
+    #                         observed)
+    user_action_type: int = 0
+    user_action_elapsed: int = 0
+    user_action_target: int = 0
+
+    # Map-identity signature (Flow 2). Multi-map houses switch
+    # base.30 / base.44 between maps; treat the pair as an opaque
+    # key — when it changes the active map has changed.
+    map_signature: tuple[int | None, int | None] = (None, None)
 
     # Map
     map_data: MapData | None = None
@@ -641,11 +722,14 @@ class NarwalState:
     def update_from_working_status(self, decoded: dict[str, Any]) -> None:
         """Update state from a decoded working_status message.
 
-        Confirmed via 35-min monitor capture (2026-02-27):
-          Field 3  = current session elapsed time (seconds)
-                     (confirmed: 2136→2159 over 35-min clean)
-          Field 13 = cleaning area (cm²) — CONFIRMED (18000 = 1.8m²)
-          Field 15 = 600 during cleaning (purpose uncertain)
+        Field 3   = current session elapsed time in seconds (Flow 1).
+        Field 13  = legacy area in cm² (Flow 1 — constant 18000 on Flow 2).
+        Field 1   = float32 cleaning progress percent (Flow 2, live).
+        Field 2   = float32 cleaned area in m² (Flow 2, live).
+        Field 5   = list of room entries; sub-field 4 = 1 marks a room as
+                    completed (Flow 2, live).
+        Field 6   = current room id being cleaned (Flow 2, live).
+        Field 15  = 600 during cleaning, purpose uncertain.
         """
         self.raw_working_status = decoded
         if "3" in decoded:
@@ -655,6 +739,53 @@ class NarwalState:
                 pass
         if "13" in decoded:
             self.cleaning_area = int(decoded["13"])
+        # Flow 2: float32 progress and area encoded as fixed32 ints.
+        progress = _to_float32(decoded.get("1"))
+        if progress is not None and 0 <= progress <= 200:
+            self.cleaning_progress_pct = progress
+        area = _to_float32(decoded.get("2"))
+        if area is not None and 0 <= area <= 10000:
+            self.cleaning_area_m2 = area
+        # Track which rooms in the queue have been completed.
+        rooms = decoded.get("5")
+        completed: list[int] = []
+        if isinstance(rooms, list):
+            for entry in rooms:
+                if isinstance(entry, dict) and entry.get("4") == 1:
+                    try:
+                        completed.append(int(entry.get("1", 0)))
+                    except (ValueError, TypeError):
+                        pass
+        elif isinstance(rooms, dict) and rooms.get("4") == 1:
+            try:
+                completed.append(int(rooms.get("1", 0)))
+            except (ValueError, TypeError):
+                pass
+        self.rooms_completed = completed
+        # Mop-drying timer (Flow 2 hypothesis from live capture).
+        try:
+            self.mop_drying_elapsed = int(decoded.get("8", 0) or 0)
+        except (ValueError, TypeError):
+            self.mop_drying_elapsed = 0
+        try:
+            self.mop_drying_target = int(decoded.get("9", 0) or 0)
+        except (ValueError, TypeError):
+            self.mop_drying_target = 0
+        # ws.22 = user-action countdown ({1: elapsed, 2: target}). Empty
+        # dict when no action is required.
+        f22 = decoded.get("22")
+        if isinstance(f22, dict) and f22:
+            try:
+                self.user_action_elapsed = int(f22.get("1", 0) or 0)
+            except (ValueError, TypeError):
+                self.user_action_elapsed = 0
+            try:
+                self.user_action_target = int(f22.get("2", 0) or 0)
+            except (ValueError, TypeError):
+                self.user_action_target = 0
+        else:
+            self.user_action_elapsed = 0
+            self.user_action_target = 0
         if "15" in decoded:
             # Field 15 may be cumulative time; prefer field 3 for current session
             pass
@@ -687,6 +818,90 @@ class NarwalState:
                 self.dock_field11 = int(decoded["11"])
             except (ValueError, TypeError):
                 self.dock_field11 = 0
+        # Field 26 = current suction level (Flow 2 only; live captures from
+        # firmware v01.07.19.00 confirm the 1-indexed scale 1=Quiet,
+        # 2=Standard, 3=Strong, 4=Super powerful). Not observed on Flow 1
+        # — leaves fan_level_raw at 0 there.
+        if "26" in decoded:
+            try:
+                self.fan_level_raw = int(decoded["26"])
+            except (ValueError, TypeError):
+                self.fan_level_raw = 0
+        # Field 29 = current mop humidity (Flow 2). 1=Slightly dry,
+        # 2=Standard, 3=Slightly wet (live-confirmed).
+        if "29" in decoded:
+            try:
+                self.mop_humidity_raw = int(decoded["29"])
+            except (ValueError, TypeError):
+                self.mop_humidity_raw = 0
+        # Field 41 = dust bag remaining capacity, 0–100.
+        if "41" in decoded:
+            try:
+                self.dust_bag_health = int(decoded["41"])
+            except (ValueError, TypeError):
+                self.dust_bag_health = 0
+        # Field 48.1 carries one or more dock activities. It's a single
+        # message during a normal clean, but switches to a repeated list
+        # when multiple activities overlap (e.g. mop drying while a
+        # dust-bag emptying is queued). Normalize to a list so the
+        # parsers below don't need to care.
+        f48_1 = decoded.get("48", {}).get("1")
+        f48_entries: list[dict[str, Any]] = []
+        if isinstance(f48_1, list):
+            f48_entries = [e for e in f48_1 if isinstance(e, dict)]
+        elif isinstance(f48_1, dict):
+            f48_entries = [f48_1]
+
+        # Active error. The robot reports one through two channels:
+        #   * 48.1.*.2 = {1: severity, 2: code, 3: localized_message}
+        #   * field 1 = {1: code, 2: severity, 3: formatted_message}
+        # Field 1 also carries the formatted "错误码:0xCCSSRRXX\n等级:..."
+        # banner string. Either or both can be populated; whichever
+        # appears first wins. Empty/absent on both = no active error.
+        err = next(
+            (e["2"] for e in f48_entries
+             if isinstance(e.get("2"), dict) and e["2"]),
+            None,
+        )
+        f1 = decoded.get("1")
+        if isinstance(err, dict) and err:
+            try:
+                self.error_severity = int(err.get("1", 0))
+            except (ValueError, TypeError):
+                self.error_severity = 0
+            try:
+                self.error_code = int(err.get("2", 0))
+            except (ValueError, TypeError):
+                self.error_code = 0
+            raw_msg = err.get("3", "")
+            if isinstance(raw_msg, bytes):
+                self.error_message = raw_msg.decode("utf-8", errors="replace")
+            else:
+                self.error_message = str(raw_msg)
+        elif isinstance(f1, dict) and f1:
+            # Secondary channel — note the swapped fields: 1 is the code.
+            try:
+                self.error_code = int(f1.get("1", 0))
+            except (ValueError, TypeError):
+                self.error_code = 0
+            try:
+                self.error_severity = int(f1.get("2", 0))
+            except (ValueError, TypeError):
+                self.error_severity = 0
+            raw_msg = f1.get("3", "")
+            if isinstance(raw_msg, bytes):
+                self.error_message = raw_msg.decode("utf-8", errors="replace")
+            else:
+                self.error_message = str(raw_msg)
+        else:
+            self.error_code = 0
+            self.error_severity = 0
+            self.error_message = ""
+
+        # Station-activity markers within 48.1.*. Empty `{}` flags signal
+        # which dock activity each entry represents (live-observed).
+        self.station_dust_emptying = any("10" in e for e in f48_entries)
+        self.station_mop_drying = any("15" in e for e in f48_entries)
         # Field 47 = dock indicator (3=docked, 2=undocked)
         if "47" in decoded:
             try:
@@ -719,6 +934,29 @@ class NarwalState:
                 self.dock_presence = int(field3.get("3", 0))
             except (ValueError, TypeError):
                 self.dock_presence = 0
+            # Sub-field 16 = user-action prompt type (Flow 2):
+            #   2 = fill water tank / problem solved
+            #   3 = bring robot to dock after clean done
+            #   4 = bring robot to dock to start clean
+            try:
+                self.user_action_type = int(field3.get("16", 0) or 0)
+            except (ValueError, TypeError):
+                self.user_action_type = 0
+        else:
+            self.user_action_type = 0
+
+        # Map identity (Flow 2). base.30 + base.44 form an opaque
+        # signature that flips between saved maps; track them so the
+        # coordinator can refresh get_map() when the user switches.
+        try:
+            sig30 = int(decoded["30"]) if "30" in decoded else None
+        except (ValueError, TypeError):
+            sig30 = None
+        try:
+            sig44 = int(decoded["44"]) if "44" in decoded else None
+        except (ValueError, TypeError):
+            sig44 = None
+        self.map_signature = (sig30, sig44)
         if "2" in decoded:
             # Field 2 = real-time battery SOC as float32
             # (e.g. 1118175232 → 83.0%; bbp may return int or float)

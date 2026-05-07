@@ -29,6 +29,12 @@
       "cleaning_area": {
         "name": "Cleaning area"
       },
+      "cleaning_progress": {
+        "name": "Cleaning progress"
+      },
+      "mop_drying_progress": {
+        "name": "Mop drying progress"
+      },
       "cleaning_time": {
         "name": "Cleaning time"
       },
@@ -42,6 +48,27 @@
           "fully_charged": "Fully Charged",
           "not_charging": "Not Charging"
         }
+      },
+      "dust_bag_health": {
+        "name": "Dust bag health"
+      },
+      "station_activity": {
+        "name": "Station activity",
+        "state": {
+          "idle": "Idle",
+          "mop_washing": "Mop washing",
+          "mop_drying": "Mop drying",
+          "dust_emptying": "Dust emptying"
+        }
+      },
+      "error_code": {
+        "name": "Error code"
+      },
+      "error_message": {
+        "name": "Error message"
+      },
+      "user_action_seconds_left": {
+        "name": "User action seconds left"
       }
     },
     "binary_sensor": {
@@ -54,6 +81,22 @@
       },
       "charging": {
         "name": "Charging"
+      },
+      "active_error": {
+        "name": "Active error"
+      },
+      "user_action_required": {
+        "name": "User action required"
+      }
+    },
+    "select": {
+      "mop_humidity": {
+        "name": "Mop humidity",
+        "state": {
+          "slightly_dry": "Slightly dry",
+          "standard": "Standard",
+          "slightly_wet": "Slightly wet"
+        }
       }
     }
   }

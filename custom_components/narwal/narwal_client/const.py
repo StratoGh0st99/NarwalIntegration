@@ -164,10 +164,14 @@ class WorkingStatus(IntEnum):
 
     UNKNOWN = 0
     STANDBY = 1       # idle / transition state
+    MOP_WASHING = 3   # robot is washing the mop on the station (Flow 2, observed live)
     CLEANING = 4      # active cleaning (stays 4 even while returning to dock)
+    MAPPING = 7       # building / saving a new map (Flow 2 — accompanied by 3.9=1)
     CLEANING_ALT = 5  # cleaning — observed when robot was physically stuck; may indicate error/stuck state
     DOCKED = 10       # on dock (does NOT reliably indicate charging vs charged)
     CHARGED = 14      # on dock (reported before 100% — use battery_level for charge state)
+    MOP_DRYING = 17   # mop drying — observed transitioning into the cycle on Flow 2
+    MOP_DRYING_ACTIVE = 19  # mop drying — main active phase (sub-field 18 counts steps)
     # PLACEHOLDER: error state value not yet observed live.
     # Trigger a real error (e.g., pick up robot mid-clean) to discover the value.
     ERROR = 99
@@ -188,6 +192,17 @@ class MopHumidity(IntEnum):
     DRY = 0
     NORMAL = 1
     WET = 2
+
+
+# Known error codes (Flow 2). Codes are packed as 0xCC SS RR XX
+# (category, sub-category, reserved, specific) and stable across
+# firmware updates. Map each one to a snake_case identifier so
+# automations don't need to depend on the localized message.
+ERROR_CODES: dict[int, str] = {
+    0x01010036: "clean_water_dirty_tank_anomaly",  # 16842806 — dirty water tank issue during mop wash
+    0x01010137: "clean_water_tank_empty",          # 16842807 — clean water tank empty / not installed
+    0x02310031: "robot_lifted",                     # 36765745 — robot picked up / suspended
+}
 
 
 # robot_base_status field numbers
