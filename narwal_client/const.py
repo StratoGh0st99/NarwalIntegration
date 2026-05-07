@@ -59,6 +59,13 @@ TOPIC_DOWNLOAD_STATUS = "status/download_status"
 TOPIC_DISPLAY_MAP = "map/display_map"
 TOPIC_TIMELINE_STATUS = "status/time_line_status"
 TOPIC_PLANNING_DEBUG = "developer/planning_debug_info"
+# Forward path the robot is about to drive — list of {1: x, 2: y} float32
+# coordinates encoded as fixed32 ints. Confirmed via local capture.
+TOPIC_POINT_NAVI_PLAN_TRAJ = "status/point_navi_plan_traj"
+# Event-only broadcast: fires once at end of a clean cycle with an empty
+# payload. Used as a trigger to refresh the map snapshot and reset
+# session-scoped state. Confirmed via local capture.
+TOPIC_CLEAN_REPORT = "report/clean_report"
 
 # --- Command topics (client → robot, confirmed working) ---
 # Common

@@ -67,8 +67,11 @@ def _now_iso() -> str:
 def _iter_log_stream(host: str) -> Iterator[str]:
     """Yield log lines from `ha core logs --follow` over SSH."""
     cmd = ["ssh", host, "ha core logs --follow"]
+    # Pipe stderr through so SSH connection errors / "ha: command not
+    # found" surface immediately instead of silently producing an empty
+    # stream — the latter looks identical to "robot is silent".
     proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        cmd, stdout=subprocess.PIPE, stderr=sys.stderr,
         bufsize=1, text=True,
     )
     assert proc.stdout is not None
@@ -252,7 +255,7 @@ def cmd_probe(args: argparse.Namespace) -> int:
 
     print(f"[probe] streaming logs from {args.host} (Ctrl-C to stop)")
     print(f"[probe] {len(known)} known topics loaded from const.py")
-    print("[probe] press RETURN, type a label, RETURN again to mark an event")
+    print("[probe] type a label and press ENTER to mark an event")
     print()
 
     t = threading.Thread(
