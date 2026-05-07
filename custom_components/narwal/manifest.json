@@ -9,5 +9,18 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/sjmotew/NarwalIntegration/issues",
   "requirements": ["bbpb>=1.4.0", "Pillow>=9.0.0"],
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "zeroconf": [
+    {
+      "type": "_narwal_sweeper._tcp.local."
+    }
+  ],
+  "dhcp": [
+    {
+      "hostname": "narwal_*"
+    },
+    {
+      "hostname": "NARWAL_*"
+    }
+  ]
 }
