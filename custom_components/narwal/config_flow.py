@@ -39,6 +39,30 @@ class NarwalConfigFlow(ConfigFlow, domain=DOMAIN):
         # robot before the user starts the flow.
         self._discovered_host: str | None = None
 
+    async def _check_already_configured(
+        self, host: str, fallback_uid: str,
+    ) -> ConfigFlowResult | None:
+        """Return an abort result when this host is already a config
+        entry, otherwise None and seed the discovery unique_id.
+
+        The user step assigns unique_id from the robot's device_id
+        (queried over the WebSocket), which mDNS / DHCP can't see.
+        Without a host-based check the same robot would re-appear as
+        a "Discovered" card forever after a manual add.
+        """
+        for entry in self._async_current_entries(include_ignore=False):
+            if entry.data.get("host") == host:
+                # Update host on the matching entry in case the IP
+                # drifted (DHCP renewal, robot moved subnets) and
+                # abort the discovery flow.
+                self.hass.config_entries.async_update_entry(
+                    entry, data={**entry.data, "host": host},
+                )
+                return self.async_abort(reason="already_configured")
+        await self.async_set_unique_id(fallback_uid)
+        self._abort_if_unique_id_configured(updates={"host": host})
+        return None
+
     async def async_step_zeroconf(
         self, discovery_info: ZeroconfServiceInfo
     ) -> ConfigFlowResult:
@@ -50,10 +74,14 @@ class NarwalConfigFlow(ConfigFlow, domain=DOMAIN):
         the IP for now — the user still picks the model on the next
         step, the model name isn't in the mDNS payload.
         """
-        self._discovered_host = str(discovery_info.host)
-        await self.async_set_unique_id(discovery_info.hostname.rstrip("."))
-        self._abort_if_unique_id_configured(updates={"host": self._discovered_host})
-        self.context["title_placeholders"] = {"host": self._discovered_host}
+        host = str(discovery_info.host)
+        already = await self._check_already_configured(
+            host, discovery_info.hostname.rstrip("."),
+        )
+        if already is not None:
+            return already
+        self._discovered_host = host
+        self.context["title_placeholders"] = {"host": host}
         return await self.async_step_user()
 
     async def async_step_dhcp(
@@ -65,10 +93,14 @@ class NarwalConfigFlow(ConfigFlow, domain=DOMAIN):
         Hostname pattern ``NARWAL_*`` / ``narwal_*`` is declared in
         manifest.json.
         """
-        self._discovered_host = str(discovery_info.ip)
-        await self.async_set_unique_id(discovery_info.hostname or self._discovered_host)
-        self._abort_if_unique_id_configured(updates={"host": self._discovered_host})
-        self.context["title_placeholders"] = {"host": self._discovered_host}
+        host = str(discovery_info.ip)
+        already = await self._check_already_configured(
+            host, discovery_info.hostname or host,
+        )
+        if already is not None:
+            return already
+        self._discovered_host = host
+        self.context["title_placeholders"] = {"host": host}
         return await self.async_step_user()
 
     async def async_step_user(
