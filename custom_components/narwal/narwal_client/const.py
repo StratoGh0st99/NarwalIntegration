@@ -89,6 +89,25 @@ TOPIC_CMD_SET_FAN_LEVEL = "clean/set_fan_level"
 TOPIC_CMD_SET_MOP_HUMIDITY = "clean/set_mop_humidity"
 TOPIC_CMD_GET_CURRENT_TASK = "clean/current_clean_task/get"
 
+# Cleaning v2 (Flow 2 — extracted from libapp.so strings 2026-05-07).
+# The Flow-2 firmware exposes a richer `clean_system/req_*` family
+# alongside the legacy `clean/plan/*` topics. The new ones accept
+# per-room / per-zone parameters in their payload, which is what
+# enables proper single-room cleaning (#25).
+TOPIC_CMD_REQ_SWEEP_ROOM = "clean_system/req_sweep_room_by_plan_params"
+TOPIC_CMD_REQ_MOP_ROOM = "clean_system/req_mop_room_by_plan_params"
+TOPIC_CMD_REQ_SWEEP_ZONE = "clean_system/req_sweep_zone_by_plan_params"
+TOPIC_CMD_REQ_MOP_ZONE = "clean_system/req_mop_zone_by_plan_params"
+TOPIC_CMD_REQ_SWEEP_BY_PLAN_ID = "clean_system/req_sweep_by_plan_id"
+TOPIC_CMD_REQ_MOP_BY_PLAN_ID = "clean_system/req_mop_by_plan_id"
+TOPIC_CMD_REQ_PAUSE = "clean_system/req_pause_task"
+TOPIC_CMD_REQ_RESUME = "clean_system/req_resume_task"
+TOPIC_CMD_REQ_CANCEL = "clean_system/req_cancel_task"
+TOPIC_CMD_REQ_FORCE_END = "clean_system/req_force_end"
+TOPIC_CMD_REQ_RETURN_BASE = "clean_system/req_return_base_station"
+TOPIC_CMD_REQ_CLEAN_MOP = "clean_system/req_clean_mop"
+TOPIC_CMD_REQ_BUILD_MAP = "clean_system/req_build_map"
+
 # Map
 TOPIC_CMD_GET_MAP = "map/get_map"
 TOPIC_CMD_GET_ALL_MAPS = "map/get_all_reduced_maps"
