@@ -76,7 +76,7 @@
         "name": "Error message"
       },
       "station_error_code": {
-        "name": "Station error code"
+        "name": "Dirty water tank error code"
       },
       "user_action_seconds_left": {
         "name": "User action seconds left"
@@ -97,7 +97,7 @@
         "name": "Active error"
       },
       "station_tank_error": {
-        "name": "Station tank error"
+        "name": "Dirty water tank error"
       },
       "user_action_required": {
         "name": "User action required"
