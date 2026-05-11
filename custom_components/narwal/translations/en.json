@@ -99,6 +99,9 @@
       "station_tank_error": {
         "name": "Dirty water tank"
       },
+      "clean_water_tank": {
+        "name": "Clean water tank"
+      },
       "user_action_required": {
         "name": "User action required"
       }

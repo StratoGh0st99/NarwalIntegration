@@ -14,6 +14,8 @@ from .coordinator import NarwalCoordinator
 from .entity import NarwalEntity
 from .narwal_client import ERROR_CODES
 
+CLEAN_WATER_TANK_ERROR_CODE = 0x01010137
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -26,6 +28,7 @@ async def async_setup_entry(
         NarwalDockedSensor(coordinator),
         NarwalActiveErrorSensor(coordinator),
         NarwalStationTankErrorSensor(coordinator),
+        NarwalCleanWaterTankSensor(coordinator),
         NarwalUserActionSensor(coordinator),
     ])
 
@@ -85,6 +88,44 @@ class NarwalStationTankErrorSensor(NarwalEntity, BinarySensorEntity):
             "identifier": ERROR_CODES.get(state.station_error_code, "unknown"),
             "severity": state.station_error_severity,
             "field25_slot": state.station_error_slot,
+        }
+
+
+class NarwalCleanWaterTankSensor(NarwalEntity, BinarySensorEntity):
+    """On when the base station reports clean-water tank empty/missing.
+
+    Flow 2 live test: starting a mop clean with the clean-water tank removed
+    kept the app green until the station needed water. Then field 48.1.2
+    reported code 16842807 with message "clean water tank empty or not
+    installed (no Hall sensor) while washing mop".
+    """
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_translation_key = "clean_water_tank"
+
+    def __init__(self, coordinator: NarwalCoordinator) -> None:
+        super().__init__(coordinator)
+        device_id = coordinator.config_entry.data["device_id"]
+        self._attr_unique_id = f"{device_id}_clean_water_tank"
+
+    @property
+    def is_on(self) -> bool | None:
+        state = self.coordinator.data
+        if state is None:
+            return None
+        return state.error_code == CLEAN_WATER_TANK_ERROR_CODE
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | int]:
+        state = self.coordinator.data
+        if state is None or state.error_code != CLEAN_WATER_TANK_ERROR_CODE:
+            return {}
+        return {
+            "code": state.error_code,
+            "code_hex": f"0x{state.error_code:08x}",
+            "identifier": ERROR_CODES.get(state.error_code, "unknown"),
+            "severity": state.error_severity,
+            "message": state.error_message,
         }
 
 
