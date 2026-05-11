@@ -542,6 +542,12 @@ class NarwalState:
     error_code: int = 0
     error_severity: int = 0
     error_message: str = ""
+    # Station/tank faults can be reported through robot_base_status.25.*
+    # instead of the regular 48.1.2 / field 1 channels. Flow 2 test:
+    # base.25.6={1:1,2:16842806} while the app highlighted Dirty Water Tank.
+    station_error_code: int = 0
+    station_error_severity: int = 0
+    station_error_slot: int = 0
 
     # Station activity flags. Field 48.1 is a (possibly-repeated) list
     # of currently-active dock tasks. Each entry uses an empty marker
@@ -971,6 +977,34 @@ class NarwalState:
             None,
         )
         f1 = decoded.get("1")
+        field25 = decoded.get("25")
+        station_err: tuple[int, dict[str, Any]] | None = None
+        if isinstance(field25, dict):
+            for raw_slot, payload in field25.items():
+                if isinstance(payload, dict) and payload:
+                    try:
+                        slot = int(raw_slot)
+                    except (ValueError, TypeError):
+                        slot = 0
+                    station_err = (slot, payload)
+                    break
+
+        if station_err is not None:
+            slot, payload = station_err
+            self.station_error_slot = slot
+            try:
+                self.station_error_severity = int(payload.get("1", 0))
+            except (ValueError, TypeError):
+                self.station_error_severity = 0
+            try:
+                self.station_error_code = int(payload.get("2", 0))
+            except (ValueError, TypeError):
+                self.station_error_code = 0
+        else:
+            self.station_error_slot = 0
+            self.station_error_severity = 0
+            self.station_error_code = 0
+
         if isinstance(err, dict) and err:
             try:
                 self.error_severity = int(err.get("1", 0))
@@ -1000,6 +1034,13 @@ class NarwalState:
                 self.error_message = raw_msg.decode("utf-8", errors="replace")
             else:
                 self.error_message = str(raw_msg)
+        elif self.station_error_code:
+            # Station/tank faults observed on Flow 2 arrive via field 25.*
+            # with no text message. Promote them to the generic error
+            # sensors as well so users get one consistent fault surface.
+            self.error_code = self.station_error_code
+            self.error_severity = self.station_error_severity
+            self.error_message = ""
         else:
             self.error_code = 0
             self.error_severity = 0

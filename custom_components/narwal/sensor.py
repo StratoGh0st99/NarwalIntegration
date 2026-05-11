@@ -155,6 +155,13 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         # Flow 2 we tested) — prefer error_code for automations.
         value_fn=lambda state: state.error_message or "",
     ),
+    NarwalSensorEntityDescription(
+        key="station_error_code",
+        translation_key="station_error_code",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        # Station/tank fault code from robot_base_status.25.*; 0 when clear.
+        value_fn=lambda state: state.station_error_code,
+    ),
 )
 
 

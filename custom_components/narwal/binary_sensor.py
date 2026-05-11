@@ -25,6 +25,7 @@ async def async_setup_entry(
     async_add_entities([
         NarwalDockedSensor(coordinator),
         NarwalActiveErrorSensor(coordinator),
+        NarwalStationTankErrorSensor(coordinator),
         NarwalUserActionSensor(coordinator),
     ])
 
@@ -47,6 +48,44 @@ class NarwalDockedSensor(NarwalEntity, BinarySensorEntity):
         if state is None:
             return None
         return state.is_docked
+
+
+class NarwalStationTankErrorSensor(NarwalEntity, BinarySensorEntity):
+    """On when the base station reports a tank-related fault.
+
+    Flow 2 reports station tank faults through robot_base_status field 25.*,
+    not the generic field 48.1.2 error channel. In live testing,
+    base.25.6={1:1,2:16842806} appeared while the official app highlighted
+    Dirty Water Tank in red.
+    """
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_translation_key = "station_tank_error"
+
+    def __init__(self, coordinator: NarwalCoordinator) -> None:
+        super().__init__(coordinator)
+        device_id = coordinator.config_entry.data["device_id"]
+        self._attr_unique_id = f"{device_id}_station_tank_error"
+
+    @property
+    def is_on(self) -> bool | None:
+        state = self.coordinator.data
+        if state is None:
+            return None
+        return state.station_error_code != 0
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | int]:
+        state = self.coordinator.data
+        if state is None or state.station_error_code == 0:
+            return {}
+        return {
+            "code": state.station_error_code,
+            "code_hex": f"0x{state.station_error_code:08x}",
+            "identifier": ERROR_CODES.get(state.station_error_code, "unknown"),
+            "severity": state.station_error_severity,
+            "field25_slot": state.station_error_slot,
+        }
 
 
 class NarwalActiveErrorSensor(NarwalEntity, BinarySensorEntity):

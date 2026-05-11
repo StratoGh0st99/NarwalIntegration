@@ -207,9 +207,9 @@ class MopHumidity(IntEnum):
 # firmware updates. Map each one to a snake_case identifier so
 # automations don't need to depend on the localized message.
 ERROR_CODES: dict[int, str] = {
-    0x01010036: "clean_water_dirty_tank_anomaly",  # 16842806 — dirty water tank issue during mop wash
-    0x01010137: "clean_water_tank_empty",          # 16842807 — clean water tank empty / not installed
-    0x02310031: "robot_lifted",                     # 36765745 — robot picked up / suspended
+    0x01010036: "dirty_water_tank_error",  # 16842806 — Flow 2 app shows Dirty Water Tank red
+    0x01010137: "clean_water_tank_empty",  # 16842807 — clean water tank empty / not installed
+    0x02310031: "robot_lifted",            # 36765745 — robot picked up / suspended
 }
 
 

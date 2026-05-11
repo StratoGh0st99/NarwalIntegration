@@ -75,6 +75,9 @@
       "error_message": {
         "name": "Error message"
       },
+      "station_error_code": {
+        "name": "Station error code"
+      },
       "user_action_seconds_left": {
         "name": "User action seconds left"
       }
@@ -92,6 +95,9 @@
       },
       "active_error": {
         "name": "Active error"
+      },
+      "station_tank_error": {
+        "name": "Station tank error"
       },
       "user_action_required": {
         "name": "User action required"
