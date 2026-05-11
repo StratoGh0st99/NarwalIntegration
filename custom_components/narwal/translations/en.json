@@ -36,6 +36,9 @@
       "mop_drying_progress": {
         "name": "Mop drying progress"
       },
+      "dust_bag_drying_progress": {
+        "name": "Dust bag drying progress"
+      },
       "dust_disinfection_progress": {
         "name": "Dust disinfection progress"
       },

@@ -70,6 +70,19 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         ),
     ),
     NarwalSensorEntityDescription(
+        key="dust_bag_drying_progress",
+        translation_key="dust_bag_drying_progress",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        # Manual dust-bag drying publishes f48.10 plus ws.12 elapsed /
+        # ws.13 target (18000 s = 5 h). Only expose it while f48.10 is
+        # active, because ws.12 is also used as cleaning elapsed time.
+        value_fn=lambda state: (
+            round(state.dust_bag_drying_elapsed * 100 / state.dust_bag_drying_target, 1)
+            if state.dust_bag_drying_target > 0 else 0
+        ),
+    ),
+    NarwalSensorEntityDescription(
         key="dust_disinfection_progress",
         translation_key="dust_disinfection_progress",
         native_unit_of_measurement=PERCENTAGE,
@@ -103,7 +116,8 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.SECONDS,
         state_class=SensorStateClass.MEASUREMENT,
-        # working_status.3 — session elapsed seconds. 0 when idle.
+        # working_status.12, but only during active cleaning. The same
+        # field is reused as a station-cycle timer during drying.
         value_fn=lambda state: state.cleaning_time,
     ),
     NarwalSensorEntityDescription(

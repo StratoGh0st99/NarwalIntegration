@@ -559,13 +559,20 @@ class NarwalState:
     # has not yet been observed in capture.
     station_dust_emptying: bool = False
 
+    # Dust-bag drying timer. During manual bag drying the station marker
+    # f48.10 is present, and ws.12/ws.13 carry elapsed/target seconds
+    # (observed target 18000 = 5 h). ws.12 is also cleaning elapsed time,
+    # so only treat it as bag-drying progress while f48.10 is active.
+    dust_bag_drying_elapsed: int = 0
+    dust_bag_drying_target: int = 0
+
     # Disinfection timer. ws.10 = elapsed seconds, ws.11 = target
     # seconds (constant 2700 = 45 min in observed firmware). Both 0
     # when disinfection is not running. Earlier we considered these
     # generic dock-activity fields — they're disinfection-specific:
     # ws.10/ws.11 vanish from the working_status broadcast as soon as
     # the disinfection cycle ends, even while dust-bag drying is still
-    # active. No timer for bag drying has been identified yet.
+    # active.
     dust_disinfection_elapsed: int = 0
     dust_disinfection_target: int = 0
 
@@ -762,14 +769,19 @@ class NarwalState:
         Field 15  = 600 during cleaning, purpose uncertain
         """
         self.raw_working_status = decoded
-        # cleaning_time: prefer field 12 (real elapsed seconds). Field 3
-        # is the WorkingStatus enum and was the source of a previous bug
-        # where the "Cleaning time" sensor showed status codes.
-        if "12" in decoded:
+        is_cleaning = self.working_status in (
+            WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
+        )
+        # cleaning_time: field 12 is real elapsed seconds during a clean,
+        # but the firmware reuses it as a station-cycle timer during
+        # dust-bag drying. Keep Cleaning time at 0 unless actively cleaning.
+        if is_cleaning and "12" in decoded:
             try:
                 self.cleaning_time = int(decoded["12"])
             except (ValueError, TypeError):
                 pass
+        elif not is_cleaning:
+            self.cleaning_time = 0
         # Flow 2: float32 progress and area encoded as fixed32 ints.
         progress = _to_float32(decoded.get("1"))
         if progress is not None and 0 <= progress <= 200:
@@ -806,6 +818,21 @@ class NarwalState:
             self.mop_drying_target = int(decoded.get("9", 0) or 0)
         except (ValueError, TypeError):
             self.mop_drying_target = 0
+        # Dust-bag drying timer. Uses ws.12/ws.13, but only while the
+        # f48.10 marker is active; otherwise those fields have other
+        # meanings (notably Cleaning time).
+        if self.station_dust_bag_drying:
+            try:
+                self.dust_bag_drying_elapsed = int(decoded.get("12", 0) or 0)
+            except (ValueError, TypeError):
+                self.dust_bag_drying_elapsed = 0
+            try:
+                self.dust_bag_drying_target = int(decoded.get("13", 0) or 0)
+            except (ValueError, TypeError):
+                self.dust_bag_drying_target = 0
+        else:
+            self.dust_bag_drying_elapsed = 0
+            self.dust_bag_drying_target = 0
         # Disinfection timer (ws.10 elapsed / ws.11 target). The fields
         # are absent from the broadcast when no disinfection cycle is
         # running — `.get("10", 0)` resolves to 0 in that case.
