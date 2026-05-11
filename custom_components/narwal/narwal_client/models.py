@@ -854,7 +854,7 @@ class NarwalState:
         # Dust-bag drying timer. Uses ws.12/ws.13, but only while the
         # f48.10 marker is active; otherwise those fields have other
         # meanings (notably Cleaning time).
-        if self.station_dust_bag_drying:
+        if self.station_dust_bag_drying and not is_cleaning:
             try:
                 self.dust_bag_drying_elapsed = int(decoded.get("12", 0) or 0)
             except (ValueError, TypeError):
