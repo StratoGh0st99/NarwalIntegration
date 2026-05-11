@@ -11,10 +11,12 @@ Two complementary subcommands, made to run in two separate terminals:
 
     # Terminal A — annotations + capture (low-latency typing)
     python3 narwal_capture.py record --host root@192.168.178.3 \
+        --ssh-key ~/.ssh/openclaw_ha_ed25519 \
         --out captures/session.jsonl
 
     # Terminal B — live decoded-state dashboard
-    python3 narwal_capture.py dashboard --host root@192.168.178.3
+    python3 narwal_capture.py dashboard --host root@192.168.178.3 \
+        --ssh-key ~/.ssh/openclaw_ha_ed25519
 
 Plus offline analysis helpers:
 
@@ -76,9 +78,12 @@ def _parse_payload(raw: str) -> Any:
         return raw
 
 
-def _iter_log_stream(host: str) -> Iterator[str]:
+def _iter_log_stream(host: str, ssh_key: str | None = None) -> Iterator[str]:
     """Yield decoded log lines from `ha core logs --follow` over SSH."""
-    cmd = ["ssh", host, "ha core logs --follow"]
+    cmd = ["ssh"]
+    if ssh_key:
+        cmd.extend(["-i", str(Path(ssh_key).expanduser())])
+    cmd.extend([host, "ha core logs --follow"])
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         bufsize=1, text=True,
@@ -118,7 +123,7 @@ _NOISE_BASE_KEYS: frozenset[str] = frozenset({
 
 # Working-status fields that tick every broadcast during a clean
 # (elapsed time, area, the always-600 cumulative-time-ish field).
-_NOISE_WS_KEYS: frozenset[str] = frozenset({"3", "13", "15"})
+_NOISE_WS_KEYS: frozenset[str] = frozenset({"3", "12", "13", "15"})
 
 
 def _diff_dict(
@@ -148,11 +153,11 @@ def _diff_dict(
 
 def _writer_thread(
     host: str, out_fp: TextIO, lock: threading.Lock,
-    stop: threading.Event, verbose: bool, counter: list[int],
+    stop: threading.Event, verbose: bool, counter: list[int], ssh_key: str | None = None,
 ) -> None:
     """Read SSH log stream, write parsed DUMP lines to the JSONL output."""
     last_payload: dict[str, dict[str, Any]] = {}
-    for line in _iter_log_stream(host):
+    for line in _iter_log_stream(host, ssh_key):
         if stop.is_set():
             break
         m = DUMP_RE.match(line)
@@ -373,11 +378,11 @@ def _decode_state(
     clean_cfg: dict[str, Any] | None = None
     for e in entries:
         if "10" in e:
-            markers.append("dust_emptying")
+            markers.append("dust_bag_drying")
         if "13" in e:
-            markers.append("?13")
-        if "15" in e:
             markers.append("mop_drying")
+        if "15" in e:
+            markers.append("legacy_15?")
         if "5" in e and isinstance(e.get("5"), dict):
             clean_cfg = e["5"].get("1") if isinstance(e["5"].get("1"), dict) else None
         if "2" in e and isinstance(e.get("2"), dict) and e["2"]:
@@ -479,7 +484,7 @@ def _decode_state(
     consumed_ws.add("22")
 
     # working_status: room queue (with completion flags) + current
-    # room + cleaning telemetry. ws.5[i].4 = 1 marks a finished room.
+    # room + cleaning telemetry. Flow 2 ws.5[i].2 = 2 marks a finished room.
     wf5 = ws.get("5") if isinstance(ws, dict) else None
     queue_entries: list[dict[str, Any]] = []
     if isinstance(wf5, list):
@@ -488,15 +493,15 @@ def _decode_state(
         queue_entries = [wf5]
     if queue_entries:
         rendered = [
-            f"{e.get('1')}{'✓' if e.get('4') == 1 else ''}"
+            f"{e.get('1')}{'✓' if e.get('2') == 2 else ''}"
             for e in queue_entries
         ]
         rows.append(("Room queue", ", ".join(rendered), "ws.5 (✓=done)"))
-        done = [str(e.get("1")) for e in queue_entries if e.get("4") == 1]
-        rows.append(("Rooms done", ", ".join(done) or "-", "ws.5[*].4=1"))
+        done = [str(e.get("1")) for e in queue_entries if e.get("2") == 2]
+        rows.append(("Rooms done", ", ".join(done) or "-", "ws.5[*].2=2"))
     else:
         rows.append(("Room queue", "-", "ws.5"))
-        rows.append(("Rooms done", "-", "ws.5[*].4=1"))
+        rows.append(("Rooms done", "-", "ws.5[*].2=2"))
     consumed_ws.add("5")
 
     cur = ws.get("6")
@@ -522,9 +527,9 @@ def _decode_state(
             pass
         consumed_ws.add("13")
 
-    if "3" in ws:
-        rows.append(("Elapsed", f"{ws['3']} s", "ws.3"))
-        consumed_ws.add("3")
+    if "12" in ws:
+        rows.append(("Elapsed", f"{ws['12']} s", "ws.12"))
+        consumed_ws.add("12")
 
     # Mop-drying timer (live-confirmed): ws.8 = elapsed seconds since
     # drying started, ws.9 = total target seconds. Silent mode targets
@@ -589,7 +594,7 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     sys.stdout.write("\033[?25l")
     sys.stdout.flush()
     try:
-        for line in _iter_log_stream(args.host):
+        for line in _iter_log_stream(args.host, args.ssh_key):
             m = DUMP_RE.match(line)
             if not m:
                 continue
@@ -672,7 +677,7 @@ def cmd_record(args: argparse.Namespace) -> int:
 
         worker = threading.Thread(
             target=_writer_thread,
-            args=(args.host, out_fp, lock, stop, args.verbose, counter),
+            args=(args.host, out_fp, lock, stop, args.verbose, counter, args.ssh_key),
             daemon=True,
         )
         worker.start()
@@ -800,6 +805,7 @@ def main() -> int:
 
     rec = sub.add_parser("record", help="record annotated broadcasts")
     rec.add_argument("--host", required=True, help="ssh target, e.g. root@192.168.178.3")
+    rec.add_argument("--ssh-key", help="optional private key for SSH")
     rec.add_argument("--out", required=True, help="JSONL output path")
     rec.add_argument(
         "--verbose", "-v", action="store_true",
@@ -812,6 +818,7 @@ def main() -> int:
         help="live decoded-state view (run in a separate terminal alongside `record`)",
     )
     dash.add_argument("--host", required=True, help="ssh target, e.g. root@192.168.178.3")
+    dash.add_argument("--ssh-key", help="optional private key for SSH")
     dash.set_defaults(func=cmd_dashboard)
 
     diff = sub.add_parser("diff", help="diff latest broadcast per topic between two captures")
