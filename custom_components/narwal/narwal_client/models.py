@@ -717,9 +717,6 @@ class NarwalState:
             return False
         if self.dock_field11 == 2 or self.dock_field47 == 3:
             return False
-        if self.station_dust_bag_drying or self.station_mop_drying:
-            return False
-
         ws = self.raw_working_status
         if not isinstance(ws, dict) or not ws:
             return False
