@@ -687,12 +687,48 @@ class NarwalState:
 
     @property
     def is_cleaning(self) -> bool:
-        """True when actively cleaning (not paused, not returning to dock)."""
+        """True when actively cleaning (not paused, not returning to dock).
+
+        Flow 2 firmware variants do not all report the same
+        robot_base_status.3.1 value while vacuuming. If the base status is
+        unmapped but the robot is off the dock and working_status carries
+        clean-session fields, infer cleaning instead of showing idle.
+        """
+        explicit_cleaning = self.working_status in (
+            WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
+        )
+        inferred_cleaning = self._looks_like_active_cleaning_session()
         return (
-            self.working_status in (WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT)
+            (explicit_cleaning or inferred_cleaning)
             and not self.is_paused
             and not self.is_returning_to_dock
         )
+
+    def _looks_like_active_cleaning_session(self) -> bool:
+        """Infer an active clean from session fields when status is unmapped."""
+        if self.working_status in (
+            WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
+            WorkingStatus.DOCKED, WorkingStatus.CHARGED,
+            WorkingStatus.MOP_WASHING, WorkingStatus.MOP_DRYING,
+            WorkingStatus.MOP_DRYING_ACTIVE,
+        ):
+            return False
+        if self.dock_sub_state == 1 or self.dock_activity > 0:
+            return False
+        if self.dock_field11 == 2 or self.dock_field47 == 3:
+            return False
+        if self.station_dust_bag_drying or self.station_mop_drying:
+            return False
+
+        ws = self.raw_working_status
+        if not isinstance(ws, dict) or not ws:
+            return False
+        # Cleaning broadcasts normally include a room queue/current room,
+        # and may include progress/area/elapsed. Drying broadcasts have
+        # ws.12/ws.13 too, so don't infer from timer fields alone.
+        room_queue = ws.get("5")
+        has_rooms = bool(room_queue) if isinstance(room_queue, (list, dict)) else False
+        return has_rooms or "6" in ws or "1" in ws or "2" in ws
 
     @property
     def is_docked(self) -> bool:
@@ -771,7 +807,7 @@ class NarwalState:
         self.raw_working_status = decoded
         is_cleaning = self.working_status in (
             WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
-        )
+        ) or self._looks_like_active_cleaning_session()
         # cleaning_time: field 12 is real elapsed seconds during a clean,
         # but the firmware reuses it as a station-cycle timer during
         # dust-bag drying. Keep Cleaning time at 0 unless actively cleaning.
