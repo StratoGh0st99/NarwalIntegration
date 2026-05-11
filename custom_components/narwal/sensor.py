@@ -81,7 +81,7 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         # while a new clean starts.
         value_fn=lambda state: (
             round(state.dust_bag_drying_elapsed * 100 / state.dust_bag_drying_target, 1)
-            if state.dust_bag_drying_target > 0 and not state.is_cleaning else 0
+            if state.dust_bag_drying_target > 0 and state.is_docked and not state.is_cleaning else 0
         ),
     ),
     NarwalSensorEntityDescription(
@@ -264,10 +264,9 @@ class NarwalStationActivitySensor(NarwalEntity, SensorEntity):
         if state is None:
             return None
         # Field 48 station markers can remain present while the robot has
-        # already left the dock and is actively cleaning. In that case the
-        # user-facing vacuum state should be cleaning, not a stale station
-        # drying activity.
-        if state.is_cleaning:
+        # already left the dock. In that case the user-facing vacuum state
+        # should be cleaning/off-dock, not a stale station drying activity.
+        if state.is_cleaning or not state.is_docked:
             return "idle"
         # Mop wash takes priority — the robot is physically engaged
         # with the basin so other activities can't really overlap.
