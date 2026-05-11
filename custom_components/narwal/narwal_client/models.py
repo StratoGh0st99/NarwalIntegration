@@ -523,13 +523,14 @@ class NarwalState:
     fan_level_raw: int = 0
     mop_humidity_raw: int = 0
 
-    # Station / consumables. Field 41 is broadcast as a percentage that
-    # tracks dust-bag remaining capacity (100 = healthy/empty bag, drops
-    # toward 0 as it fills). Validated against the app's "Dust bag:
-    # Healthy" indicator at 100. Other tank/solution levels (clean
-    # water, dirty water, cleaning solution, mop pad wear) are not yet
-    # mapped — most appear constant at 1 (=OK) until a fault occurs.
-    dust_bag_health: int = 0
+    # Station / consumables. Field 35 is dust-bag remaining capacity as
+    # an IEEE 754 float32 percentage (e.g. 1117188891 -> 75.47%). Field
+    # 41 is broadcast as 100 on Flow 2 even when the app shows the dust
+    # bag below 100%, so it is not the dust-bag health value.
+    # Other tank/solution levels (clean water, dirty water, cleaning
+    # solution, mop pad wear) are not yet mapped — most appear constant
+    # at 1 (=OK) until a fault occurs.
+    dust_bag_health: float = 0.0
 
     # Active fault / error. The robot reports a structured error in
     # robot_base_status field 48.1.2 — empty `{}` when there is no
@@ -940,12 +941,12 @@ class NarwalState:
                 self.mop_humidity_raw = int(decoded["29"])
             except (ValueError, TypeError):
                 self.mop_humidity_raw = 0
-        # Field 41 = dust bag remaining capacity, 0–100.
-        if "41" in decoded:
-            try:
-                self.dust_bag_health = int(decoded["41"])
-            except (ValueError, TypeError):
-                self.dust_bag_health = 0
+        # Field 35 = dust bag remaining capacity, 0–100, encoded as float32.
+        # Field 41 stays at 100 on Flow 2 even when the app does not.
+        if "35" in decoded:
+            dust_bag = _to_float32(decoded["35"])
+            if dust_bag is not None:
+                self.dust_bag_health = round(dust_bag, 1)
         # Field 48.1 carries one or more dock activities. It's a single
         # message during a normal clean, but switches to a repeated list
         # when multiple activities overlap (e.g. mop drying while a
@@ -1074,6 +1075,11 @@ class NarwalState:
             bat = _to_float32(decoded["2"])
             if bat is not None:
                 self.battery_level = round(bat)
+        if "35" in decoded:
+            # Field 35 = dust bag remaining capacity as float32 percentage.
+            dust_bag = _to_float32(decoded["35"])
+            if dust_bag is not None:
+                self.dust_bag_health = round(dust_bag, 1)
         if "38" in decoded:
             # Field 38 = static battery health (always 100, design capacity)
             self.battery_health = int(decoded["38"])
@@ -1101,6 +1107,10 @@ class NarwalState:
             bat = _to_float32(decoded["2"])
             if bat is not None:
                 self.battery_level = round(bat)
+        if "35" in decoded:
+            dust_bag = _to_float32(decoded["35"])
+            if dust_bag is not None:
+                self.dust_bag_health = round(dust_bag, 1)
         if "38" in decoded:
             self.battery_health = int(decoded["38"])
         if "36" in decoded:

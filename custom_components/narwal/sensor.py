@@ -134,7 +134,8 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        # robot_base_status field 41: 100 = bag healthy/empty, drops as full.
+        # robot_base_status field 35: dust bag remaining capacity as a
+        # float32 percentage. Field 41 stays at 100 on Flow 2.
         value_fn=lambda state: state.dust_bag_health or None,
     ),
     NarwalSensorEntityDescription(

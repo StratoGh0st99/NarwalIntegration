@@ -217,19 +217,22 @@ ERROR_CODES: dict[int, str] = {
 class BaseStatusField(IntEnum):
     """Field numbers in the robot_base_status protobuf message.
 
-    Battery notes (confirmed via 35-min monitor capture, 2026-02-27):
+    Battery / consumable notes:
       Field 2  = real-time battery level as IEEE 754 float32
                  (e.g. 1118175232 → 83.0%, matching app display ~84%)
+      Field 35 = dust bag remaining capacity as IEEE 754 float32 percentage
       Field 38 = static battery health (always 100; design capacity, not SOC)
+      Field 41 = constant 100 on Flow 2; not dust-bag health
     """
 
     BATTERY_LEVEL = 2  # real-time SOC as float32 — CONFIRMED
     MODE_STATE = 3
     SESSION_ID = 13
     SENSOR_DATA = 25
+    DUST_BAG_HEALTH = 35
     TIMESTAMP = 36
     BATTERY_HEALTH = 38  # static, always 100 (design capacity)
-    BATTERY_CAPACITY = 41
+    BATTERY_CAPACITY = 41  # observed constant 100 on Flow 2
 
 
 # upgrade_status field numbers
