@@ -14,7 +14,7 @@ from .coordinator import NarwalCoordinator
 from .entity import NarwalEntity
 from .narwal_client import ERROR_CODES
 
-CLEAN_WATER_TANK_ERROR_CODE = 0x01010137
+CLEAN_WATER_TANK_ERROR_CODE = 0x01010037
 
 
 async def async_setup_entry(
