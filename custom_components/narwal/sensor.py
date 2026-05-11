@@ -278,15 +278,14 @@ class NarwalStationActivitySensor(NarwalEntity, SensorEntity):
         # working_status = 19 even during dust-bag drying — that
         # mislabelled bag-drying cycles as mop_drying.
         #
-        # Capture also showed manual dust-bag drying can publish both
-        # f48.10 (bag drying) and f48.13 (mop drying) at the same time,
-        # while the app labels the operation as dust-bag drying. Prefer
-        # the more specific dust-bag/disinfection activities over generic
-        # mop drying when multiple station markers overlap.
-        if state.station_dust_bag_drying:
-            return "dust_bag_drying"
+        # Capture also showed multiple station markers can be present at
+        # once. When disinfection is active, f48.10 can remain present as
+        # the queued next dust-bag-drying step, so disinfection must win.
+        # Otherwise prefer dust-bag drying over generic mop drying.
         if state.station_dust_disinfecting:
             return "dust_disinfection"
+        if state.station_dust_bag_drying:
+            return "dust_bag_drying"
         if state.station_mop_drying:
             return "mop_drying"
         return "idle"
