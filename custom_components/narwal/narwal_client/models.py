@@ -6,7 +6,14 @@ import struct
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
-from .const import CommandResult, ERROR_MESSAGES_EN, FanLevel, MopHumidity, WorkingStatus
+from .const import (
+    CommandResult,
+    ERROR_MESSAGE_SNIPPETS_EN,
+    ERROR_MESSAGES_EN,
+    FanLevel,
+    MopHumidity,
+    WorkingStatus,
+)
 
 
 @dataclass
@@ -56,6 +63,16 @@ _FLOW2_ROOM_TYPE_OVERRIDES: dict[int, str] = {
 
 # product_keys that use the Flow 2 mapping. Add more as community confirms.
 _FLOW2_PRODUCT_KEYS: frozenset[str] = frozenset({"QxMSPG6VSO"})
+
+
+def _translate_error_message(code: int, localized_message: str) -> str:
+    """Return an English error message for known Flow 2 faults."""
+    if code in ERROR_MESSAGES_EN:
+        return ERROR_MESSAGES_EN[code]
+    for snippet, message in ERROR_MESSAGE_SNIPPETS_EN.items():
+        if snippet in localized_message:
+            return message
+    return localized_message
 
 
 def get_room_type_names(product_key: str | None) -> dict[int, str]:
@@ -1025,7 +1042,7 @@ class NarwalState:
                 self.error_message_localized = raw_msg.decode("utf-8", errors="replace")
             else:
                 self.error_message_localized = str(raw_msg)
-            self.error_message = ERROR_MESSAGES_EN.get(self.error_code, self.error_message_localized)
+            self.error_message = _translate_error_message(self.error_code, self.error_message_localized)
         elif isinstance(f1, dict) and f1:
             # Secondary channel — note the swapped fields: 1 is the code.
             try:
@@ -1041,7 +1058,7 @@ class NarwalState:
                 self.error_message_localized = raw_msg.decode("utf-8", errors="replace")
             else:
                 self.error_message_localized = str(raw_msg)
-            self.error_message = ERROR_MESSAGES_EN.get(self.error_code, self.error_message_localized)
+            self.error_message = _translate_error_message(self.error_code, self.error_message_localized)
         elif self.station_error_code:
             # Station/tank faults observed on Flow 2 arrive via field 25.*
             # with no text message. Promote them to the generic error

@@ -223,6 +223,15 @@ ERROR_MESSAGES_EN: dict[int, str] = {
     0x02310031: "Robot lifted or suspended",
 }
 
+# Fallback translation snippets for localized firmware messages whose numeric
+# code has not been confirmed yet. Keep this conservative: only add strings
+# observed in captures/screenshots.
+ERROR_MESSAGE_SNIPPETS_EN: dict[str, str] = {
+    "左后驱轮卡住": "Left rear drive wheel stuck",
+    "扫地时滚刷过流": "The roller brush is tangled. Please check and clear it.",
+    "扫地时右边刷异常": "Right side brush abnormal while sweeping",
+}
+
 
 # robot_base_status field numbers
 class BaseStatusField(IntEnum):
