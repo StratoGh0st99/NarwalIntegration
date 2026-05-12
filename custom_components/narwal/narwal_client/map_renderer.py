@@ -384,24 +384,41 @@ def render_map_png(
                 room_sum_y[room_id] = room_sum_y.get(room_id, 0) + y
                 room_count[room_id] = room_count.get(room_id, 0) + 1
 
-    # Flip vertically BEFORE drawing overlays — pixel data is stored with
-    # Y increasing upward (math coordinates) but images render Y downward.
-    # Overlays (labels, dock, robot) use flipped coordinates so text is right-side up.
+    # Flip vertically BEFORE upscaling/overlays — pixel data is stored
+    # with Y increasing upward (math coordinates) but images render Y
+    # downward. Overlays (labels, dock, robot) use flipped coordinates
+    # so text is right-side up.
     img = img.transpose(Image.FLIP_TOP_BOTTOM)
 
-    draw = ImageDraw.Draw(img)
+    # Upscale the room grid with NEAREST so the colored blocks stay
+    # crisp instead of getting browser-bilinear-blurred. Aim for ~720 px
+    # on the long edge — large enough to look smooth in the HA UI
+    # without bloating the PNG. Overlays are then drawn at the upscaled
+    # resolution so dock / robot / labels look smooth.
+    scale = max(1, min(720 // max(width, height), 12))
+    if scale > 1:
+        img = img.resize((width * scale, height * scale), Image.NEAREST)
 
-    # Draw room labels at flipped centroids
+    draw = ImageDraw.Draw(img)
+    sw = width * scale
+    sh = height * scale
+
+    # Draw room labels at flipped centroids (scaled).
     if room_names:
+        font_size = max(11, 6 * scale)
         try:
-            font = ImageFont.truetype("arial.ttf", 10)
+            font = ImageFont.truetype("arial.ttf", font_size)
         except (IOError, OSError):
-            font = ImageFont.load_default()
+            try:
+                # macOS / Linux fallback fonts
+                font = ImageFont.truetype("DejaVuSans.ttf", font_size)
+            except (IOError, OSError):
+                font = ImageFont.load_default()
         for rid, name in room_names.items():
             if not name or rid not in room_count:
                 continue
-            cx = room_sum_x[rid] // room_count[rid]
-            cy = height - 1 - (room_sum_y[rid] // room_count[rid])
+            cx = (room_sum_x[rid] // room_count[rid]) * scale + scale // 2
+            cy = (height - 1 - (room_sum_y[rid] // room_count[rid])) * scale + scale // 2
             bbox = font.getbbox(name)
             tw = bbox[2] - bbox[0]
             th = bbox[3] - bbox[1]
@@ -412,18 +429,22 @@ def render_map_png(
                 draw.text((tx + ox, ty + oy), name, fill=(0, 0, 0), font=font)
             draw.text((tx, ty), name, fill=(255, 255, 255), font=font)
 
-    # Draw dock position (before robot so robot draws on top)
-    # Flip dock Y to match the flipped image
+    # Draw dock position (before robot so robot draws on top), scaled.
     if dock_x is not None and dock_y is not None:
-        dock_size = max(4, min(width, height) // 60)
-        _draw_dock(draw, int(dock_x), height - 1 - int(dock_y), dock_size)
+        dock_size = max(6, min(sw, sh) // 50)
+        _draw_dock(
+            draw,
+            int(dock_x) * scale + scale // 2,
+            (height - 1 - int(dock_y)) * scale + scale // 2,
+            dock_size,
+        )
 
-    # Draw robot position (flip Y) — skip if out of bounds
+    # Draw robot position (flip Y, scaled) — skip if out of bounds.
     if robot_x is not None and robot_y is not None:
-        rx = int(robot_x)
-        ry = height - 1 - int(robot_y)
-        if 0 <= rx < width and 0 <= ry < height:
-            radius = max(3, min(width, height) // 80)
+        rx = int(robot_x) * scale + scale // 2
+        ry = (height - 1 - int(robot_y)) * scale + scale // 2
+        if 0 <= rx < sw and 0 <= ry < sh:
+            radius = max(5, min(sw, sh) // 60)
             _draw_robot(draw, rx, ry, robot_heading, radius)
 
     buf = io.BytesIO()
@@ -507,18 +528,32 @@ def render_base_map(
                 room_count[room_id] = room_count.get(room_id, 0) + 1
 
     img = img.transpose(Image.FLIP_TOP_BOTTOM)
+
+    # Upscale with NEAREST so the colored room blocks stay crisp.
+    # render_overlay() reads scale via img.info["narwal_scale"] and
+    # transforms grid coords accordingly.
+    scale = max(1, min(720 // max(width, height), 12))
+    if scale > 1:
+        img = img.resize((width * scale, height * scale), Image.NEAREST)
+    img.info["narwal_scale"] = scale
+
     draw = ImageDraw.Draw(img)
+    sw, sh = width * scale, height * scale
 
     if room_names:
+        font_size = max(11, 6 * scale)
         try:
-            font = ImageFont.truetype("arial.ttf", 10)
+            font = ImageFont.truetype("arial.ttf", font_size)
         except (IOError, OSError):
-            font = ImageFont.load_default()
+            try:
+                font = ImageFont.truetype("DejaVuSans.ttf", font_size)
+            except (IOError, OSError):
+                font = ImageFont.load_default()
         for rid, name in room_names.items():
             if not name or rid not in room_count:
                 continue
-            cx = room_sum_x[rid] // room_count[rid]
-            cy = height - 1 - (room_sum_y[rid] // room_count[rid])
+            cx = (room_sum_x[rid] // room_count[rid]) * scale + scale // 2
+            cy = (height - 1 - (room_sum_y[rid] // room_count[rid])) * scale + scale // 2
             bbox = font.getbbox(name)
             tw = bbox[2] - bbox[0]
             th = bbox[3] - bbox[1]
@@ -528,41 +563,48 @@ def render_base_map(
                 draw.text((tx + ox, ty + oy), name, fill=(0, 0, 0), font=font)
             draw.text((tx, ty), name, fill=(255, 255, 255), font=font)
 
-    # Draw obstacle/furniture annotations (static data from get_map field 2.32)
+    # Draw obstacle / furniture annotations (static data from get_map
+    # field 2.32). Coordinates are in grid units, scaled to pixels.
     if obstacles:
+        obs_font_size = max(9, 5 * scale)
         try:
-            obs_font = ImageFont.truetype("arial.ttf", 8)
+            obs_font = ImageFont.truetype("arial.ttf", obs_font_size)
         except (IOError, OSError):
-            obs_font = ImageFont.load_default()
+            try:
+                obs_font = ImageFont.truetype("DejaVuSans.ttf", obs_font_size)
+            except (IOError, OSError):
+                obs_font = ImageFont.load_default()
         for obs in obstacles:
             gx, gy = obs.to_grid_coords(origin_x, origin_y)
-            # Skip out-of-bounds obstacles
             if gx < 0 or gx >= width or gy < 0 or gy >= height:
                 continue
-            img_x = int(gx)
-            img_y = height - 1 - int(gy)
-            half_w = max(1, int(obs.width / 2))
-            half_h = max(1, int(obs.height / 2))
+            img_x = int(gx) * scale + scale // 2
+            img_y = (height - 1 - int(gy)) * scale + scale // 2
+            half_w = max(scale, int(obs.width / 2 * scale))
+            half_h = max(scale, int(obs.height / 2 * scale))
             color = OBSTACLE_COLORS.get(obs.type_id, OBSTACLE_COLOR_DEFAULT)
             draw.rectangle(
                 [img_x - half_w, img_y - half_h, img_x + half_w, img_y + half_h],
-                outline=color, width=1,
+                outline=color, width=max(1, scale // 4),
             )
-            # Draw label centered above the rectangle
             label = obs.display_name
             bbox = obs_font.getbbox(label)
             tw = bbox[2] - bbox[0]
             th = bbox[3] - bbox[1]
             lx = img_x - tw // 2
             ly = img_y - half_h - th - 2
-            # Dark outline for readability
             for ox, oy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                 draw.text((lx + ox, ly + oy), label, fill=(0, 0, 0), font=obs_font)
             draw.text((lx, ly), label, fill=color, font=obs_font)
 
     if dock_x is not None and dock_y is not None:
-        dock_size = max(4, min(width, height) // 60)
-        _draw_dock(draw, int(dock_x), height - 1 - int(dock_y), dock_size)
+        dock_size = max(6, min(sw, sh) // 50)
+        _draw_dock(
+            draw,
+            int(dock_x) * scale + scale // 2,
+            (height - 1 - int(dock_y)) * scale + scale // 2,
+            dock_size,
+        )
 
     return img
 
@@ -591,27 +633,36 @@ def render_overlay(
     from PIL import ImageDraw
 
     img = base_img.copy()
+    img.info["narwal_scale"] = base_img.info.get("narwal_scale", 1)
     draw = ImageDraw.Draw(img)
-    width = img.width
+    scale = img.info["narwal_scale"]
+    sw, sh = img.width, img.height
+
+    def gx(x: float) -> int:
+        return int(x) * scale + scale // 2
+
+    def gy(y: float) -> int:
+        return (height - 1 - int(y)) * scale + scale // 2
 
     # Draw trail (blue path showing where robot has cleaned)
     if trail and len(trail) >= 2:
         recent_start = max(len(trail) - 200, 0)
+        line_w = max(2, scale // 2)
         for i in range(len(trail) - 1):
             if i >= recent_start:
                 color = (30, 120, 255)  # bright blue for recent
             else:
                 color = (15, 60, 130)  # dim blue for older
-            x1, y1 = int(trail[i][0]), height - 1 - int(trail[i][1])
-            x2, y2 = int(trail[i + 1][0]), height - 1 - int(trail[i + 1][1])
-            draw.line([(x1, y1), (x2, y2)], fill=color, width=2)
+            x1, y1 = gx(trail[i][0]), gy(trail[i][1])
+            x2, y2 = gx(trail[i + 1][0]), gy(trail[i + 1][1])
+            draw.line([(x1, y1), (x2, y2)], fill=color, width=line_w)
 
     # Draw robot
     if robot_x is not None and robot_y is not None:
-        rx = int(robot_x)
-        ry = height - 1 - int(robot_y)
-        if 0 <= rx < width and 0 <= ry < height:
-            radius = max(3, min(width, height) // 80)
+        rx = gx(robot_x)
+        ry = gy(robot_y)
+        if 0 <= rx < sw and 0 <= ry < sh:
+            radius = max(5, min(sw, sh) // 60)
             _draw_robot(draw, rx, ry, robot_heading, radius)
 
     buf = io.BytesIO()

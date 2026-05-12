@@ -6,7 +6,14 @@ import struct
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
-from .const import CommandResult, FanLevel, MopHumidity, WorkingStatus
+from .const import (
+    CommandResult,
+    ERROR_MESSAGE_SNIPPETS_EN,
+    ERROR_MESSAGES_EN,
+    FanLevel,
+    MopHumidity,
+    WorkingStatus,
+)
 
 
 @dataclass
@@ -18,17 +25,77 @@ class DeviceInfo:
     firmware_version: str = ""
 
 
+# ROOM_TYPE enum → display name (Flow 1 / AX12, from APK libapp.so strings).
+_FLOW1_ROOM_TYPE_NAMES: dict[int, str] = {
+    0: "Room",
+    1: "Primary Bedroom",
+    2: "Secondary Bedroom",
+    3: "Living Room",
+    4: "Kitchen",
+    5: "Study",
+    6: "Bathroom",
+    7: "Dining Room",
+    8: "Corridor",
+    9: "Balcony",
+    10: "Utility Room",
+    11: "Cloak Room",
+    12: "Nursery",
+    13: "Recreation Room",
+    14: "Shower Room",
+    15: "Other",
+}
+
+# Flow 2 reorders the ROOM_TYPE enum vs Flow 1. Confirmed via live capture
+# (firmware v01.07.19.00, product_key QxMSPG6VSO) by walking every type in
+# the Narwal app's room-type picker. Only deltas are listed; sub_types not
+# present here use the Flow 1 name.
+_FLOW2_ROOM_TYPE_OVERRIDES: dict[int, str] = {
+    1: "Master Bedroom",
+    5: "Bathroom",
+    6: "Toilet",
+    7: "Balcony",
+    8: "Dining Room",
+    9: "Cloakroom",
+    10: "Corridor",
+    11: "Study",
+    14: "Storage Room",
+}
+
+# product_keys that use the Flow 2 mapping. Add more as community confirms.
+_FLOW2_PRODUCT_KEYS: frozenset[str] = frozenset({"QxMSPG6VSO"})
+
+
+def _translate_error_message(code: int, localized_message: str) -> str:
+    """Return an English error message for known Flow 2 faults."""
+    if code in ERROR_MESSAGES_EN:
+        return ERROR_MESSAGES_EN[code]
+    for snippet, message in ERROR_MESSAGE_SNIPPETS_EN.items():
+        if snippet in localized_message:
+            return message
+    return localized_message
+
+
+def get_room_type_names(product_key: str | None) -> dict[int, str]:
+    """Return the ROOM_TYPE → display-name mapping for a given device.
+
+    Flow 2 (and possibly other newer models) renamed/reordered the ROOM_TYPE
+    enum. We pick the right base mapping from product_key and fall back to
+    Flow 1 for unknown devices.
+    """
+    base = dict(_FLOW1_ROOM_TYPE_NAMES)
+    if product_key and product_key in _FLOW2_PRODUCT_KEYS:
+        base.update(_FLOW2_ROOM_TYPE_OVERRIDES)
+    return base
+
+
 @dataclass
 class RoomInfo:
     """A room on the map.
 
     Fields from get_map / get_editable_map field 2.12:
       field 1: room_id (matches pixel value >> 8 in map grid)
-      field 2: room_sub_type — ROOM_TYPE enum from APK (0=unspecified,
-               1=main bedroom, 2=secondary room, 3=living room, 4=kitchen,
-               5=study, 6=bathroom, 7=dining room, 8=corridor, 9=balcony,
-               10=utility room, 11=cloak room, 12=nursery, 13=recreation,
-               14=shower room, 15=other)
+      field 2: room_sub_type — ROOM_TYPE enum from APK. The string mapping
+               differs between Flow 1 and Flow 2 (see get_room_type_names).
       field 3: user-assigned name (UTF-8, empty if not named by user)
       field 4: category (1=room, 2=utility/small space)
       field 8: instance_index (1-based, for numbering duplicates: Bathroom 1, 2, 3...)
@@ -40,29 +107,13 @@ class RoomInfo:
     category: int = 0  # 1=room, 2=utility (field 4)
     instance_index: int = 0  # numbering for duplicates (field 8)
 
-    # ROOM_TYPE enum → default display name (from APK libapp.so string analysis)
+    # ROOM_TYPE enum → default display name. Set by MapData.from_response
+    # based on the connected device's product_key; defaults to Flow 1 names.
     ROOM_TYPE_NAMES: dict[int, str] = field(default=None, repr=False)
 
     def __post_init__(self):
         if self.ROOM_TYPE_NAMES is None:
-            object.__setattr__(self, "ROOM_TYPE_NAMES", {
-                0: "Room",
-                1: "Primary Bedroom",
-                2: "Secondary Bedroom",
-                3: "Living Room",
-                4: "Kitchen",
-                5: "Study",
-                6: "Bathroom",
-                7: "Dining Room",
-                8: "Corridor",
-                9: "Balcony",
-                10: "Utility Room",
-                11: "Cloak Room",
-                12: "Nursery",
-                13: "Recreation Room",
-                14: "Shower Room",
-                15: "Other",
-            })
+            object.__setattr__(self, "ROOM_TYPE_NAMES", dict(_FLOW1_ROOM_TYPE_NAMES))
 
     @property
     def display_name(self) -> str:
@@ -238,11 +289,21 @@ class MapData:
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_response(cls, decoded: dict[str, Any]) -> MapData:
-        """Parse map data from a get_map field5 response."""
+    def from_response(
+        cls, decoded: dict[str, Any], product_key: str | None = None,
+    ) -> MapData:
+        """Parse map data from a get_map field5 response.
+
+        Args:
+            decoded: bbp-decoded map response payload.
+            product_key: Connected device's product_key. Selects the
+                ROOM_TYPE → display-name mapping (Flow 1 vs Flow 2).
+        """
         payload = decoded.get("2", {})
         if not payload:
             return cls()
+
+        type_names = get_room_type_names(product_key)
 
         rooms = []
         room_list = payload.get("12", [])
@@ -266,6 +327,7 @@ class MapData:
                     room_sub_type=int(room.get("2", 0)),
                     category=int(room.get("4", 0)),
                     instance_index=int(room.get("8", 0)),
+                    ROOM_TYPE_NAMES=type_names,
                 ))
 
         compressed = payload.get("17", b"")
@@ -471,6 +533,73 @@ class NarwalState:
     firmware_version: str = ""
     firmware_target: str = ""
 
+    # Current clean settings (Flow 2 — live-broadcast in robot_base_status).
+    # 0 means "not yet observed" (the robot uses 1-indexed values).
+    #   field 26 = suction (1=Quiet, 2=Standard, 3=Strong, 4=Super powerful)
+    #   field 29 = mop humidity (1=Slightly dry, 2=Standard, 3=Slightly wet)
+    fan_level_raw: int = 0
+    mop_humidity_raw: int = 0
+
+    # Station / consumables. Field 35 is dust-bag remaining capacity as
+    # an IEEE 754 float32 percentage (e.g. 1117188891 -> 75.47%). Field
+    # 41 is broadcast as 100 on Flow 2 even when the app shows the dust
+    # bag below 100%, so it is not the dust-bag health value.
+    # Other tank/solution levels (clean water, dirty water, cleaning
+    # solution, mop pad wear) are not yet mapped — most appear constant
+    # at 1 (=OK) until a fault occurs.
+    dust_bag_health: float = 0.0
+
+    # Active fault / error. The robot reports a structured error in
+    # robot_base_status field 48.1.2 — empty `{}` when there is no
+    # active error, or `{1: severity, 2: code, 3: localized_message}`
+    # when a fault halts the current task. The message is broadcast in
+    # whatever locale the robot's firmware was set to (Chinese on the
+    # Flow 2 hardware we tested), so consumers should prefer the
+    # numeric code for logic and use the message for display.
+    error_code: int = 0
+    error_severity: int = 0
+    error_message: str = ""
+    error_message_localized: str = ""
+    # Station/tank faults can be reported through robot_base_status.25.*
+    # instead of the regular 48.1.2 / field 1 channels. Flow 2 test:
+    # base.25.6={1:1,2:16842806} while the app highlighted Dirty Water Tank.
+    station_error_code: int = 0
+    station_error_severity: int = 0
+    station_error_slot: int = 0
+
+    # Station activity flags. Field 48.1 is a (possibly-repeated) list
+    # of currently-active dock tasks. Each entry uses an empty marker
+    # sub-field to identify the task type. Sub-keys verified by capture:
+    #   .10 = dust-bag drying (NOT dust emptying — earlier guess)
+    #   .13 = mop drying
+    #   .14 = dust-cabinet disinfection
+    # Entries without a `1` field are running; `1: 1` marks paused.
+    # WorkingStatus 17 / 19 also indicate mop-drying phases when the
+    # robot itself is the actor — see NarwalStationActivitySensor.
+    station_dust_bag_drying: bool = False
+    station_mop_drying: bool = False
+    station_dust_disinfecting: bool = False
+    # App-started room vacuum capture (2026-05-12) showed f48.5/f48.6
+    # while the dock audibly emptied the robot before undocking.
+    station_dust_emptying: bool = False
+
+    # Dust-bag drying timer. During manual bag drying the station marker
+    # f48.10 is present, and ws.12/ws.13 carry elapsed/target seconds
+    # (observed target 18000 = 5 h). ws.12 is also cleaning elapsed time,
+    # so only treat it as bag-drying progress while f48.10 is active.
+    dust_bag_drying_elapsed: int = 0
+    dust_bag_drying_target: int = 0
+
+    # Disinfection timer. ws.10 = elapsed seconds, ws.11 = target
+    # seconds (constant 2700 = 45 min in observed firmware). Both 0
+    # when disinfection is not running. Earlier we considered these
+    # generic dock-activity fields — they're disinfection-specific:
+    # ws.10/ws.11 vanish from the working_status broadcast as soon as
+    # the disinfection cycle ends, even while dust-bag drying is still
+    # active.
+    dust_disinfection_elapsed: int = 0
+    dust_disinfection_target: int = 0
+
     # Device identity
     device_info: DeviceInfo | None = None
 
@@ -481,9 +610,52 @@ class NarwalState:
     # Position (from map data)
     position: Position | None = None
 
-    # Cleaning stats
-    cleaning_area: int = 0  # cm²
+    # Cleaning stats. Two separate sources:
+    #   * Flow 1: working_status field 13 in cm² (legacy upstream code).
+    #   * Flow 2: working_status fields 1 and 2 carry float32 progress % and
+    #     cleaned-area m² (live captures). Prefer the Flow 2 fields when
+    #     populated; fall back to the legacy cm² value otherwise. Field 13
+    #     is a constant (18000) on Flow 2 and never the actual area.
+    cleaning_area: int = 0  # legacy: working_status.13 in cm² (Flow 1)
+    cleaning_area_m2: float = 0.0  # live: working_status.2 as float32 m² (Flow 2)
+    cleaning_progress_pct: float = 0.0  # live: working_status.1 as float32 % (Flow 2)
     cleaning_time: int = 0  # seconds
+
+    # Rooms reported as completed within the active clean.
+    # Derived from working_status.5 — each entry that gains sub-field
+    # 4 = 1 has been finished. Empty list when not cleaning or all
+    # rooms still pending.
+    rooms_completed: list[int] = field(default_factory=list)
+
+    # Mop-drying timer (Flow 2). Live-confirmed by toggling between
+    # drying modes:
+    #   ws.8 = elapsed seconds since the cycle started
+    #   ws.9 = target total seconds for the selected mode
+    #     - 12600 (3.5 h) for default / smart / strong
+    #     - 18000 (5 h)   for silent
+    # Switching modes mid-cycle rescales ws.8 so the percent-complete
+    # stays consistent. Both fields drop to 0 once drying stops.
+    mop_drying_elapsed: int = 0
+    mop_drying_target: int = 0
+
+    # User-action prompt (Flow 2). When the robot needs the user to
+    # do something physical (carry me to dock, refill the tank, etc.)
+    # it broadcasts a structured prompt and starts a countdown. Empty
+    # / 0 when nothing is required:
+    #   user_action_type    = base.3.16 (2=fill tank, 3=return after
+    #                         clean, 4=return before clean — observed)
+    #   user_action_elapsed = ws.22.1 — seconds the user has been
+    #                         asked already
+    #   user_action_target  = ws.22.2 — timeout in seconds (600 / 3600
+    #                         observed)
+    user_action_type: int = 0
+    user_action_elapsed: int = 0
+    user_action_target: int = 0
+
+    # Map-identity signature (Flow 2). Multi-map houses switch
+    # base.30 / base.44 between maps; treat the pair as an opaque
+    # key — when it changes the active map has changed.
+    map_signature: tuple[int | None, int | None] = (None, None)
 
     # Map
     map_data: MapData | None = None
@@ -507,6 +679,12 @@ class NarwalState:
     # Dock activity (field 3 sub-field 12: 2/6 observed when docked)
     dock_activity: int = 0
 
+    # Remote camera/manual-control mode. During a live app camera/manual
+    # steering session, robot_base_status.31=1 and field 3.4=15; both
+    # cleared/changed when the live mode ended.
+    remote_control_active: bool = False
+    remote_control_sub_state: int = 0
+
     # Dock presence (field 3 sub-field 3)
     # Values observed: 1=on dock, 2=off dock, 6=on dock (charged idle)
     dock_presence: int = 0
@@ -529,14 +707,55 @@ class NarwalState:
     raw_base_status: dict[str, Any] = field(default_factory=dict)
     raw_working_status: dict[str, Any] = field(default_factory=dict)
 
+    # Forward path the robot is about to drive — list of (x, y) world
+    # coordinates decoded from status/point_navi_plan_traj. Empty list
+    # when the robot is idle or no path is currently planned.
+    plan_trajectory: list[tuple[float, float]] = field(default_factory=list)
+    # Wall-clock timestamp of the most recent report/clean_report event
+    # (empty-payload broadcast that fires once at end of a clean cycle).
+    last_clean_report_ts: float = 0.0
+
     @property
     def is_cleaning(self) -> bool:
-        """True when actively cleaning (not paused, not returning to dock)."""
+        """True when actively cleaning (not paused, not returning to dock).
+
+        Flow 2 firmware variants do not all report the same
+        robot_base_status.3.1 value while vacuuming. If the base status is
+        unmapped but the robot is off the dock and working_status carries
+        clean-session fields, infer cleaning instead of showing idle.
+        """
+        explicit_cleaning = self.working_status in (
+            WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
+        )
+        inferred_cleaning = self._looks_like_active_cleaning_session()
         return (
-            self.working_status in (WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT)
+            (explicit_cleaning or inferred_cleaning)
             and not self.is_paused
             and not self.is_returning_to_dock
         )
+
+    def _looks_like_active_cleaning_session(self) -> bool:
+        """Infer an active clean from session fields when status is unmapped."""
+        if self.working_status in (
+            WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
+            WorkingStatus.DOCKED, WorkingStatus.CHARGED,
+            WorkingStatus.MOP_WASHING, WorkingStatus.MOP_DRYING,
+            WorkingStatus.MOP_DRYING_ACTIVE,
+        ):
+            return False
+        if self.dock_sub_state == 1 or self.dock_activity > 0:
+            return False
+        if self.dock_field11 == 2 or self.dock_field47 == 3:
+            return False
+        ws = self.raw_working_status
+        if not isinstance(ws, dict) or not ws:
+            return False
+        # Cleaning broadcasts normally include a room queue/current room,
+        # and may include progress/area/elapsed. Drying broadcasts have
+        # ws.12/ws.13 too, so don't infer from timer fields alone.
+        room_queue = ws.get("5")
+        has_rooms = bool(room_queue) if isinstance(room_queue, (list, dict)) else False
+        return has_rooms or "6" in ws or "1" in ws or "2" in ws
 
     @property
     def is_docked(self) -> bool:
@@ -596,20 +815,113 @@ class NarwalState:
     def update_from_working_status(self, decoded: dict[str, Any]) -> None:
         """Update state from a decoded working_status message.
 
-        Confirmed via 35-min monitor capture (2026-02-27):
-          Field 3  = current session elapsed time (seconds)
-                     (confirmed: 2136→2159 over 35-min clean)
-          Field 13 = cleaning area (cm²) — CONFIRMED (18000 = 1.8m²)
-          Field 15 = 600 during cleaning (purpose uncertain)
+        Field semantics (re-verified 2026-05 with full Wohnzimmer-Clean
+        capture — earlier mapping had cleaning_time on field 3, which is
+        actually the WorkingStatus enum):
+
+        Field 1   = float32 cleaning progress percent
+        Field 2   = float32 cleaned area in m²
+        Field 3   = WorkingStatus enum (status code, not seconds)
+        Field 5   = list of {1: roomId, 2: completed_flag}; flag == 2
+                    means the room is done. Earlier code used sub-field
+                    4 which never appears in current firmware.
+        Field 6   = index of the room currently being cleaned
+        Field 12  = elapsed seconds for the current session
+        Field 13  = legacy area in cm² (Flow 1 only — constant 18000
+                    on Flow 2, ignored)
+        Field 15  = 600 during cleaning, purpose uncertain
         """
         self.raw_working_status = decoded
-        if "3" in decoded:
+        is_cleaning = self.working_status in (
+            WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
+        ) or self._looks_like_active_cleaning_session()
+        # cleaning_time: field 12 is real elapsed seconds during a clean,
+        # but the firmware reuses it as a station-cycle timer during
+        # dust-bag drying. Keep Cleaning time at 0 unless actively cleaning.
+        if is_cleaning and "12" in decoded:
             try:
-                self.cleaning_time = int(decoded["3"])
+                self.cleaning_time = int(decoded["12"])
             except (ValueError, TypeError):
                 pass
-        if "13" in decoded:
-            self.cleaning_area = int(decoded["13"])
+        elif not is_cleaning:
+            self.cleaning_time = 0
+        # Flow 2: float32 progress and area encoded as fixed32 ints.
+        progress = _to_float32(decoded.get("1"))
+        if progress is not None and 0 <= progress <= 200:
+            self.cleaning_progress_pct = progress
+        area = _to_float32(decoded.get("2"))
+        if area is not None and 0 <= area <= 10000:
+            self.cleaning_area_m2 = area
+        # Track which rooms in the queue have been completed.
+        rooms = decoded.get("5")
+        completed: list[int] = []
+        # Each entry is {1: roomId, 2: completion_flag}. Observed values
+        # for flag: missing (queued), 1 (in progress), 2 (done). Earlier
+        # code looked at sub-field 4 which was never populated in any
+        # capture we have.
+        if isinstance(rooms, list):
+            for entry in rooms:
+                if isinstance(entry, dict) and entry.get("2") == 2:
+                    try:
+                        completed.append(int(entry.get("1", 0)))
+                    except (ValueError, TypeError):
+                        pass
+        elif isinstance(rooms, dict) and rooms.get("2") == 2:
+            try:
+                completed.append(int(rooms.get("1", 0)))
+            except (ValueError, TypeError):
+                pass
+        self.rooms_completed = completed
+        # Mop-drying timer (Flow 2 hypothesis from live capture).
+        try:
+            self.mop_drying_elapsed = int(decoded.get("8", 0) or 0)
+        except (ValueError, TypeError):
+            self.mop_drying_elapsed = 0
+        try:
+            self.mop_drying_target = int(decoded.get("9", 0) or 0)
+        except (ValueError, TypeError):
+            self.mop_drying_target = 0
+        # Dust-bag drying timer. Uses ws.12/ws.13, but only while the
+        # f48.10 marker is active; otherwise those fields have other
+        # meanings (notably Cleaning time).
+        if self.station_dust_bag_drying and self.is_docked and not is_cleaning:
+            try:
+                self.dust_bag_drying_elapsed = int(decoded.get("12", 0) or 0)
+            except (ValueError, TypeError):
+                self.dust_bag_drying_elapsed = 0
+            try:
+                self.dust_bag_drying_target = int(decoded.get("13", 0) or 0)
+            except (ValueError, TypeError):
+                self.dust_bag_drying_target = 0
+        else:
+            self.dust_bag_drying_elapsed = 0
+            self.dust_bag_drying_target = 0
+        # Disinfection timer (ws.10 elapsed / ws.11 target). The fields
+        # are absent from the broadcast when no disinfection cycle is
+        # running — `.get("10", 0)` resolves to 0 in that case.
+        try:
+            self.dust_disinfection_elapsed = int(decoded.get("10", 0) or 0)
+        except (ValueError, TypeError):
+            self.dust_disinfection_elapsed = 0
+        try:
+            self.dust_disinfection_target = int(decoded.get("11", 0) or 0)
+        except (ValueError, TypeError):
+            self.dust_disinfection_target = 0
+        # ws.22 = user-action countdown ({1: elapsed, 2: target}). Empty
+        # dict when no action is required.
+        f22 = decoded.get("22")
+        if isinstance(f22, dict) and f22:
+            try:
+                self.user_action_elapsed = int(f22.get("1", 0) or 0)
+            except (ValueError, TypeError):
+                self.user_action_elapsed = 0
+            try:
+                self.user_action_target = int(f22.get("2", 0) or 0)
+            except (ValueError, TypeError):
+                self.user_action_target = 0
+        else:
+            self.user_action_elapsed = 0
+            self.user_action_target = 0
         if "15" in decoded:
             # Field 15 may be cumulative time; prefer field 3 for current session
             pass
@@ -642,6 +954,135 @@ class NarwalState:
                 self.dock_field11 = int(decoded["11"])
             except (ValueError, TypeError):
                 self.dock_field11 = 0
+        # Field 26 = current suction level (Flow 2 only; live captures from
+        # firmware v01.07.19.00 confirm the 1-indexed scale 1=Quiet,
+        # 2=Standard, 3=Strong, 4=Super powerful). Not observed on Flow 1
+        # — leaves fan_level_raw at 0 there.
+        if "26" in decoded:
+            try:
+                self.fan_level_raw = int(decoded["26"])
+            except (ValueError, TypeError):
+                self.fan_level_raw = 0
+        # Field 29 = current mop humidity (Flow 2). 1=Slightly dry,
+        # 2=Standard, 3=Slightly wet (live-confirmed).
+        if "29" in decoded:
+            try:
+                self.mop_humidity_raw = int(decoded["29"])
+            except (ValueError, TypeError):
+                self.mop_humidity_raw = 0
+        # Field 35 = dust bag remaining capacity, 0–100, encoded as float32.
+        # Field 41 stays at 100 on Flow 2 even when the app does not.
+        if "35" in decoded:
+            dust_bag = _to_float32(decoded["35"])
+            if dust_bag is not None:
+                self.dust_bag_health = round(dust_bag, 1)
+        # Field 48.1 carries one or more dock activities. It's a single
+        # message during a normal clean, but switches to a repeated list
+        # when multiple activities overlap (e.g. mop drying while a
+        # dust-bag emptying is queued). Normalize to a list so the
+        # parsers below don't need to care.
+        f48_1 = decoded.get("48", {}).get("1")
+        f48_entries: list[dict[str, Any]] = []
+        if isinstance(f48_1, list):
+            f48_entries = [e for e in f48_1 if isinstance(e, dict)]
+        elif isinstance(f48_1, dict):
+            f48_entries = [f48_1]
+
+        # Active error. The robot reports one through two channels:
+        #   * 48.1.*.2 = {1: severity, 2: code, 3: localized_message}
+        #   * field 1 = {1: code, 2: severity, 3: formatted_message}
+        # Field 1 also carries the formatted "错误码:0xCCSSRRXX\n等级:..."
+        # banner string. Either or both can be populated; whichever
+        # appears first wins. Empty/absent on both = no active error.
+        err = next(
+            (e["2"] for e in f48_entries
+             if isinstance(e.get("2"), dict) and e["2"]),
+            None,
+        )
+        f1 = decoded.get("1")
+        field25 = decoded.get("25")
+        station_err: tuple[int, dict[str, Any]] | None = None
+        if isinstance(field25, dict):
+            for raw_slot, payload in field25.items():
+                if isinstance(payload, dict) and payload:
+                    try:
+                        slot = int(raw_slot)
+                    except (ValueError, TypeError):
+                        slot = 0
+                    station_err = (slot, payload)
+                    break
+
+        if station_err is not None:
+            slot, payload = station_err
+            self.station_error_slot = slot
+            try:
+                self.station_error_severity = int(payload.get("1", 0))
+            except (ValueError, TypeError):
+                self.station_error_severity = 0
+            try:
+                self.station_error_code = int(payload.get("2", 0))
+            except (ValueError, TypeError):
+                self.station_error_code = 0
+        else:
+            self.station_error_slot = 0
+            self.station_error_severity = 0
+            self.station_error_code = 0
+
+        if isinstance(err, dict) and err:
+            try:
+                self.error_severity = int(err.get("1", 0))
+            except (ValueError, TypeError):
+                self.error_severity = 0
+            try:
+                self.error_code = int(err.get("2", 0))
+            except (ValueError, TypeError):
+                self.error_code = 0
+            raw_msg = err.get("3", "")
+            if isinstance(raw_msg, bytes):
+                self.error_message_localized = raw_msg.decode("utf-8", errors="replace")
+            else:
+                self.error_message_localized = str(raw_msg)
+            self.error_message = _translate_error_message(self.error_code, self.error_message_localized)
+        elif isinstance(f1, dict) and f1:
+            # Secondary channel — note the swapped fields: 1 is the code.
+            try:
+                self.error_code = int(f1.get("1", 0))
+            except (ValueError, TypeError):
+                self.error_code = 0
+            try:
+                self.error_severity = int(f1.get("2", 0))
+            except (ValueError, TypeError):
+                self.error_severity = 0
+            raw_msg = f1.get("3", "")
+            if isinstance(raw_msg, bytes):
+                self.error_message_localized = raw_msg.decode("utf-8", errors="replace")
+            else:
+                self.error_message_localized = str(raw_msg)
+            self.error_message = _translate_error_message(self.error_code, self.error_message_localized)
+        elif self.station_error_code:
+            # Station/tank faults observed on Flow 2 arrive via field 25.*
+            # with no text message. Promote them to the generic error
+            # sensors as well so users get one consistent fault surface.
+            self.error_code = self.station_error_code
+            self.error_severity = self.station_error_severity
+            self.error_message_localized = ""
+            self.error_message = ERROR_MESSAGES_EN.get(self.error_code, "")
+        else:
+            self.error_code = 0
+            self.error_severity = 0
+            self.error_message = ""
+            self.error_message_localized = ""
+
+        # Station-activity markers within 48.1.*. Each entry carries an
+        # empty `{}` sub-field whose key identifies the task type. See
+        # the field declarations above for the verified key map.
+        self.station_dust_bag_drying = any("10" in e for e in f48_entries)
+        self.station_mop_drying = any("13" in e for e in f48_entries)
+        self.station_dust_disinfecting = any("14" in e for e in f48_entries)
+        # App-started room vacuum capture (2026-05-12): the dock audibly
+        # emptied the robot before it undocked while f48.5/f48.6 were
+        # present. Treat either marker as active dust-bin emptying.
+        self.station_dust_emptying = any("5" in e or "6" in e for e in f48_entries)
         # Field 47 = dock indicator (3=docked, 2=undocked)
         if "47" in decoded:
             try:
@@ -669,17 +1110,54 @@ class NarwalState:
                 self.dock_activity = int(field3.get("12", 0))
             except (ValueError, TypeError):
                 self.dock_activity = 0
+            # Sub-field 4 = sub-state. Observed value 15 during remote
+            # camera/manual steering mode while base.31=1.
+            try:
+                self.remote_control_sub_state = int(field3.get("4", 0))
+            except (ValueError, TypeError):
+                self.remote_control_sub_state = 0
+            self.remote_control_active = bool(decoded.get("31"))
             # Sub-field 3 = dock presence (1/6=on dock, 2=off dock)
             try:
                 self.dock_presence = int(field3.get("3", 0))
             except (ValueError, TypeError):
                 self.dock_presence = 0
+            # Sub-field 16 = user-action prompt type (Flow 2):
+            #   2 = fill water tank / problem solved
+            #   3 = bring robot to dock after clean done
+            #   4 = bring robot to dock to start clean
+            try:
+                self.user_action_type = int(field3.get("16", 0) or 0)
+            except (ValueError, TypeError):
+                self.user_action_type = 0
+        else:
+            self.user_action_type = 0
+            self.remote_control_active = bool(decoded.get("31"))
+            self.remote_control_sub_state = 0
+
+        # Map identity (Flow 2). base.30 + base.44 form an opaque
+        # signature that flips between saved maps; track them so the
+        # coordinator can refresh get_map() when the user switches.
+        try:
+            sig30 = int(decoded["30"]) if "30" in decoded else None
+        except (ValueError, TypeError):
+            sig30 = None
+        try:
+            sig44 = int(decoded["44"]) if "44" in decoded else None
+        except (ValueError, TypeError):
+            sig44 = None
+        self.map_signature = (sig30, sig44)
         if "2" in decoded:
             # Field 2 = real-time battery SOC as float32
             # (e.g. 1118175232 → 83.0%; bbp may return int or float)
             bat = _to_float32(decoded["2"])
             if bat is not None:
                 self.battery_level = round(bat)
+        if "35" in decoded:
+            # Field 35 = dust bag remaining capacity as float32 percentage.
+            dust_bag = _to_float32(decoded["35"])
+            if dust_bag is not None:
+                self.dust_bag_health = round(dust_bag, 1)
         if "38" in decoded:
             # Field 38 = static battery health (always 100, design capacity)
             self.battery_health = int(decoded["38"])
@@ -707,10 +1185,37 @@ class NarwalState:
             bat = _to_float32(decoded["2"])
             if bat is not None:
                 self.battery_level = round(bat)
+        if "35" in decoded:
+            dust_bag = _to_float32(decoded["35"])
+            if dust_bag is not None:
+                self.dust_bag_health = round(dust_bag, 1)
         if "38" in decoded:
             self.battery_health = int(decoded["38"])
         if "36" in decoded:
             self.timestamp = int(decoded["36"])
+
+    def update_from_plan_traj(self, decoded: dict[str, Any]) -> None:
+        """Update state from a status/point_navi_plan_traj broadcast.
+
+        Field 1 is a repeated list of {1: x, 2: y} where each coordinate
+        is a float32 packed into a fixed32 int (same encoding as the
+        battery and area fields elsewhere in the protocol).
+
+        Empty / missing field 1 → robot has no planned path → clear the
+        cached trajectory. Bad encodings are dropped silently rather
+        than poisoning the whole list.
+        """
+        points: list[tuple[float, float]] = []
+        raw = decoded.get("1")
+        if isinstance(raw, list):
+            for entry in raw:
+                if not isinstance(entry, dict):
+                    continue
+                x = _to_float32(entry.get("1"))
+                y = _to_float32(entry.get("2"))
+                if x is not None and y is not None:
+                    points.append((x, y))
+        self.plan_trajectory = points
 
     def update_from_upgrade_status(self, decoded: dict[str, Any]) -> None:
         """Update state from a decoded upgrade_status message."""

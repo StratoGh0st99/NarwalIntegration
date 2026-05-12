@@ -23,6 +23,7 @@ DEFAULT_TOPIC_PREFIX = "/QoEsI5qYXO"
 KNOWN_PRODUCT_KEYS = [
     # Confirmed working (local WebSocket)
     "QoEsI5qYXO",  # AX12 — Narwal Flow (primary, confirmed)
+    "QxMSPG6VSO",  # — Narwal Flow 2 (confirmed via live capture)
     "DrzDKQ0MU8",   # CX4  — Freo Z10 Ultra (confirmed by @irekkl-maker)
     # Confirmed cloud-only (port 9002 open but no local broadcasts)
     "BYWBPqSxeC",   # CX7  — Freo Z Ultra (cloud-only, confirmed by @gabrielozcomidi)
@@ -58,6 +59,13 @@ TOPIC_DOWNLOAD_STATUS = "status/download_status"
 TOPIC_DISPLAY_MAP = "map/display_map"
 TOPIC_TIMELINE_STATUS = "status/time_line_status"
 TOPIC_PLANNING_DEBUG = "developer/planning_debug_info"
+# Forward path the robot is about to drive — list of {1: x, 2: y} float32
+# coordinates encoded as fixed32 ints. Confirmed via local capture.
+TOPIC_POINT_NAVI_PLAN_TRAJ = "status/point_navi_plan_traj"
+# Event-only broadcast: fires once at end of a clean cycle with an empty
+# payload. Used as a trigger to refresh the map snapshot and reset
+# session-scoped state. Confirmed via local capture.
+TOPIC_CLEAN_REPORT = "report/clean_report"
 
 # --- Command topics (client → robot, confirmed working) ---
 # Common
@@ -164,10 +172,14 @@ class WorkingStatus(IntEnum):
 
     UNKNOWN = 0
     STANDBY = 1       # idle / transition state
+    MOP_WASHING = 3   # robot is washing the mop on the station (Flow 2, observed live)
     CLEANING = 4      # active cleaning (stays 4 even while returning to dock)
+    MAPPING = 7       # building / saving a new map (Flow 2 — accompanied by 3.9=1)
     CLEANING_ALT = 5  # cleaning — observed when robot was physically stuck; may indicate error/stuck state
     DOCKED = 10       # on dock (does NOT reliably indicate charging vs charged)
     CHARGED = 14      # on dock (reported before 100% — use battery_level for charge state)
+    MOP_DRYING = 17   # mop drying — observed transitioning into the cycle on Flow 2
+    MOP_DRYING_ACTIVE = 19  # mop drying — main active phase (sub-field 18 counts steps)
     # PLACEHOLDER: error state value not yet observed live.
     # Trigger a real error (e.g., pick up robot mid-clean) to discover the value.
     ERROR = 99
@@ -190,23 +202,59 @@ class MopHumidity(IntEnum):
     WET = 2
 
 
+# Known error codes (Flow 2). Codes are packed as 0xCC SS RR XX
+# (category, sub-category, reserved, specific) and stable across
+# firmware updates. Map each one to a snake_case identifier so
+# automations don't need to depend on the localized message.
+ERROR_CODES: dict[int, str] = {
+    0x01010036: "dirty_water_tank_error",  # 16842806 — Flow 2 app shows Dirty Water Tank red
+    0x01010037: "clean_water_tank_empty",  # 16842807 — clean water tank empty / not installed
+    0x02020031: "roller_brush_tangled",    # 33685553 — app code 1044: roller brush tangled
+    0x02310026: "left_rear_drive_wheel_stuck",  # 36765734 — left rear drive wheel stuck
+    0x02310031: "robot_lifted",            # 36765745 — robot picked up / suspended
+}
+
+# English messages for confirmed Flow 2 fault codes. The robot also sends
+# localized firmware text (Chinese on the tested unit); prefer these stable
+# strings in HA so the error sensor is useful independent of robot locale.
+ERROR_MESSAGES_EN: dict[int, str] = {
+    0x01010036: "Dirty water tank problem",
+    0x01010037: "Clean water tank empty or not installed",
+    0x02020031: "The roller brush is tangled. Please check and clear it.",
+    0x02310026: "Left rear drive wheel stuck",
+    0x02310031: "Robot lifted or suspended",
+}
+
+# Fallback translation snippets for localized firmware messages whose numeric
+# code has not been confirmed yet. Keep this conservative: only add strings
+# observed in captures/screenshots.
+ERROR_MESSAGE_SNIPPETS_EN: dict[str, str] = {
+    "左后驱轮卡住": "Left rear drive wheel stuck",
+    "扫地时滚刷过流": "The roller brush is tangled. Please check and clear it.",
+    "扫地时右边刷异常": "Right side brush abnormal while sweeping",
+}
+
+
 # robot_base_status field numbers
 class BaseStatusField(IntEnum):
     """Field numbers in the robot_base_status protobuf message.
 
-    Battery notes (confirmed via 35-min monitor capture, 2026-02-27):
+    Battery / consumable notes:
       Field 2  = real-time battery level as IEEE 754 float32
                  (e.g. 1118175232 → 83.0%, matching app display ~84%)
+      Field 35 = dust bag remaining capacity as IEEE 754 float32 percentage
       Field 38 = static battery health (always 100; design capacity, not SOC)
+      Field 41 = constant 100 on Flow 2; not dust-bag health
     """
 
     BATTERY_LEVEL = 2  # real-time SOC as float32 — CONFIRMED
     MODE_STATE = 3
     SESSION_ID = 13
     SENSOR_DATA = 25
+    DUST_BAG_HEALTH = 35
     TIMESTAMP = 36
     BATTERY_HEALTH = 38  # static, always 100 (design capacity)
-    BATTERY_CAPACITY = 41
+    BATTERY_CAPACITY = 41  # observed constant 100 on Flow 2
 
 
 # upgrade_status field numbers

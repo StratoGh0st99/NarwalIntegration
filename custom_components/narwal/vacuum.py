@@ -17,12 +17,19 @@ try:
 except ImportError:
     Segment = None  # HA < 2026.3 — room cleaning unavailable
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .narwal_client import CommandResult, FanLevel, NarwalCommandError, WorkingStatus
 
 from . import NarwalConfigEntry
-from .const import FAN_SPEED_LIST, FAN_SPEED_MAP
+from .const import CONF_PRODUCT_KEY, FAN_SPEED_LIST, FAN_SPEED_MAP
+
+# Product keys whose firmware routes single-room cleaning exclusively
+# through Tuya cloud MQTT — the local WS:9002 server does not accept
+# the clean_system/* topic family. Confirmed by capturing zero traffic
+# on the local socket while the official app triggered a room clean.
+_CLOUD_ONLY_ROOM_CLEAN: frozenset[str] = frozenset({"QxMSPG6VSO"})
 from .coordinator import NarwalCoordinator
 from .entity import NarwalEntity
 
@@ -60,8 +67,18 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         | VacuumEntityFeature.RETURN_HOME
         | VacuumEntityFeature.FAN_SPEED
         | VacuumEntityFeature.LOCATE
+        | VacuumEntityFeature.SEND_COMMAND
     ) | (VacuumEntityFeature.CLEAN_AREA if Segment is not None else VacuumEntityFeature(0))
     _attr_fan_speed_list = FAN_SPEED_LIST
+
+    @property
+    def supported_features(self) -> VacuumEntityFeature:
+        """Return supported features for this specific Narwal model."""
+        features = self._attr_supported_features
+        product_key = self.coordinator.config_entry.data.get(CONF_PRODUCT_KEY, "")
+        if product_key in _CLOUD_ONLY_ROOM_CLEAN:
+            features &= ~VacuumEntityFeature.CLEAN_AREA
+        return features
 
     def __init__(self, coordinator: NarwalCoordinator) -> None:
         """Initialize the vacuum entity."""
@@ -99,10 +116,23 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
     def fan_speed(self) -> str | None:
         """Return the current fan speed.
 
-        The robot protocol does not broadcast the active fan speed setting,
-        so we track the last value set via the integration. Returns None
-        until the user sets a fan speed for the first time.
+        Flow 2 broadcasts the live suction level in robot_base_status
+        field 26 (1-indexed) but only while a clean task is active;
+        when docked/idle the field reverts to a default that doesn't
+        reflect the user's stored preference. So we only trust the
+        broadcast during cleaning, and fall back to the last
+        user-set value otherwise (matches the original behaviour).
         """
+        state = self.coordinator.data
+        flow2_levels = {1: "quiet", 2: "normal", 3: "strong", 4: "max"}
+        if (
+            state is not None
+            and state.working_status in (
+                WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
+            )
+            and state.fan_level_raw in flow2_levels
+        ):
+            return flow2_levels[state.fan_level_raw]
         return self._last_fan_speed
 
     # Timeout for action commands (start/stop/return) — robot may need
@@ -172,6 +202,33 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         await self._ensure_awake()
         await self.coordinator.client.locate()
 
+    async def async_send_command(
+        self,
+        command: str,
+        params: dict | list | None = None,
+        **kwargs,
+    ) -> None:
+        """Handle vacuum.send_command service calls.
+
+        Supported commands:
+          - "freo_mind" / "freo_mind_start": start a Freo Mind (AI auto)
+            whole-house clean. Flow 2 only.
+        """
+        if command in ("freo_mind", "freo_mind_start"):
+            await self._ensure_awake()
+            resp = await self.coordinator.client.start_freo_mind()
+            _LOGGER.info(
+                "Freo Mind start: code=%s, success=%s",
+                resp.result_code, resp.success,
+            )
+            if not resp.success:
+                _LOGGER.warning(
+                    "Freo Mind start did not succeed (code=%s)",
+                    resp.result_code,
+                )
+            return
+        _LOGGER.warning("Unknown vacuum command: %s", command)
+
     async def async_set_fan_speed(self, fan_speed: str, **kwargs) -> None:
         """Set the fan speed."""
         level = FAN_SPEED_MAP.get(fan_speed)
@@ -217,6 +274,13 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         Converts string segment IDs back to integer room IDs and sends
         a room-specific clean command to the robot.
         """
+        product_key = self.coordinator.config_entry.data.get(CONF_PRODUCT_KEY, "")
+        if product_key in _CLOUD_ONLY_ROOM_CLEAN:
+            raise HomeAssistantError(
+                "Single-room cleaning is not supported on this model via the "
+                "local connection — it is routed through the Narwal cloud. "
+                "Use the official Narwal app, or trigger a whole-house clean."
+            )
         await self._ensure_awake()
         room_ids = [int(sid) for sid in segment_ids]
         _LOGGER.info("Starting room-specific clean: rooms=%s", room_ids)

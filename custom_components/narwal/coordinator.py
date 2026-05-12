@@ -60,6 +60,9 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
         self._map_fetch_pending = False
         self._last_display_map_resub: float = 0.0
         self._consecutive_failures = 0
+        # Track the active map's identity so we can refresh get_map()
+        # when the user switches in the app.
+        self._prev_map_signature: tuple[int | None, int | None] = (None, None)
         self._max_failures = 5  # 5 * 60s = 5 minutes before entities go unavailable
 
     async def async_setup(self) -> None:
@@ -134,6 +137,29 @@ class NarwalCoordinator(DataUpdateCoordinator[NarwalState]):
                 self._fetch_missing_map(),
                 f"{DOMAIN}_map_fetch",
             )
+
+        # Detect map switch — base.30 / base.44 flip between saved maps.
+        # Refresh the cached map so the camera + segment list track the
+        # newly-active one. Skip the very first observation (None→x).
+        sig = state.map_signature
+        if (
+            sig != (None, None)
+            and self._prev_map_signature != (None, None)
+            and sig != self._prev_map_signature
+            and not self._map_fetch_pending
+        ):
+            _LOGGER.info(
+                "Active map changed (%s → %s) — re-fetching",
+                self._prev_map_signature, sig,
+            )
+            self._map_fetch_pending = True
+            self.config_entry.async_create_background_task(
+                self.hass,
+                self._fetch_missing_map(),
+                f"{DOMAIN}_map_refresh",
+            )
+        if sig != (None, None):
+            self._prev_map_signature = sig
 
         # Detect return-to-dock transition: CLEANING/CLEANING_ALT → STANDBY.
         # Broadcast dock fields are stale after docking — immediate poll
