@@ -56,7 +56,8 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         # Float32 % from working_status.1 (Flow 2). 0 when idle.
-        value_fn=lambda state: round(state.cleaning_progress_pct, 1),
+        # Expose whole percentages to match the app and avoid noisy decimals.
+        value_fn=lambda state: round(state.cleaning_progress_pct),
     ),
     NarwalSensorEntityDescription(
         key="mop_drying_progress",
@@ -65,7 +66,7 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         # ws.8 elapsed / ws.9 target. 0 when no cycle is running.
         value_fn=lambda state: (
-            round(state.mop_drying_elapsed * 100 / state.mop_drying_target, 1)
+            round(state.mop_drying_elapsed * 100 / state.mop_drying_target)
             if state.mop_drying_target > 0 else 0
         ),
     ),
@@ -80,7 +81,7 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         # used as cleaning elapsed time and f48.10 can remain present
         # while a new clean starts.
         value_fn=lambda state: (
-            round(state.dust_bag_drying_elapsed * 100 / state.dust_bag_drying_target, 1)
+            round(state.dust_bag_drying_elapsed * 100 / state.dust_bag_drying_target)
             if state.dust_bag_drying_target > 0 and state.is_docked and not state.is_cleaning else 0
         ),
     ),
@@ -92,7 +93,7 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         # ws.10 elapsed / ws.11 target (constant 2700 = 45 min). 0
         # when no disinfection cycle is running.
         value_fn=lambda state: (
-            round(state.dust_disinfection_elapsed * 100 / state.dust_disinfection_target, 1)
+            round(state.dust_disinfection_elapsed * 100 / state.dust_disinfection_target)
             if state.dust_disinfection_target > 0 else 0
         ),
     ),
@@ -136,7 +137,7 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         # robot_base_status field 35: dust bag remaining capacity as a
         # float32 percentage. Field 41 stays at 100 on Flow 2.
-        value_fn=lambda state: state.dust_bag_health or None,
+        value_fn=lambda state: round(state.dust_bag_health) if state.dust_bag_health else None,
     ),
     NarwalSensorEntityDescription(
         key="error_code",
