@@ -151,9 +151,8 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         key="error_message",
         translation_key="error_message",
         entity_category=EntityCategory.DIAGNOSTIC,
-        # Localized fault message; "" when no fault is active.
-        # Locale follows the robot's firmware setting (Chinese on the
-        # Flow 2 we tested) — prefer error_code for automations.
+        # English fault message for known codes; falls back to the robot's
+        # localized firmware text when the code is not mapped yet.
         value_fn=lambda state: state.error_message or "",
     ),
     NarwalSensorEntityDescription(

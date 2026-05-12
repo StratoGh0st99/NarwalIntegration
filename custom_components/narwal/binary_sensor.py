@@ -128,6 +128,7 @@ class NarwalCleanWaterTankSensor(NarwalEntity, BinarySensorEntity):
             "identifier": ERROR_CODES.get(state.error_code, "unknown"),
             "severity": state.error_severity,
             "message": state.error_message,
+            "localized_message": state.error_message_localized,
         }
 
 
@@ -203,6 +204,7 @@ class NarwalActiveErrorSensor(NarwalEntity, BinarySensorEntity):
             "identifier": ERROR_CODES.get(state.error_code, "unknown"),
             "severity": state.error_severity,
             "message": state.error_message,
+            "localized_message": state.error_message_localized,
         }
 
 

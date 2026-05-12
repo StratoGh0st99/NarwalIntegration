@@ -6,7 +6,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
-from .const import CommandResult, FanLevel, MopHumidity, WorkingStatus
+from .const import CommandResult, ERROR_MESSAGES_EN, FanLevel, MopHumidity, WorkingStatus
 
 
 @dataclass
@@ -542,6 +542,7 @@ class NarwalState:
     error_code: int = 0
     error_severity: int = 0
     error_message: str = ""
+    error_message_localized: str = ""
     # Station/tank faults can be reported through robot_base_status.25.*
     # instead of the regular 48.1.2 / field 1 channels. Flow 2 test:
     # base.25.6={1:1,2:16842806} while the app highlighted Dirty Water Tank.
@@ -1021,9 +1022,10 @@ class NarwalState:
                 self.error_code = 0
             raw_msg = err.get("3", "")
             if isinstance(raw_msg, bytes):
-                self.error_message = raw_msg.decode("utf-8", errors="replace")
+                self.error_message_localized = raw_msg.decode("utf-8", errors="replace")
             else:
-                self.error_message = str(raw_msg)
+                self.error_message_localized = str(raw_msg)
+            self.error_message = ERROR_MESSAGES_EN.get(self.error_code, self.error_message_localized)
         elif isinstance(f1, dict) and f1:
             # Secondary channel — note the swapped fields: 1 is the code.
             try:
@@ -1036,20 +1038,23 @@ class NarwalState:
                 self.error_severity = 0
             raw_msg = f1.get("3", "")
             if isinstance(raw_msg, bytes):
-                self.error_message = raw_msg.decode("utf-8", errors="replace")
+                self.error_message_localized = raw_msg.decode("utf-8", errors="replace")
             else:
-                self.error_message = str(raw_msg)
+                self.error_message_localized = str(raw_msg)
+            self.error_message = ERROR_MESSAGES_EN.get(self.error_code, self.error_message_localized)
         elif self.station_error_code:
             # Station/tank faults observed on Flow 2 arrive via field 25.*
             # with no text message. Promote them to the generic error
             # sensors as well so users get one consistent fault surface.
             self.error_code = self.station_error_code
             self.error_severity = self.station_error_severity
-            self.error_message = ""
+            self.error_message_localized = ""
+            self.error_message = ERROR_MESSAGES_EN.get(self.error_code, "")
         else:
             self.error_code = 0
             self.error_severity = 0
             self.error_message = ""
+            self.error_message_localized = ""
 
         # Station-activity markers within 48.1.*. Each entry carries an
         # empty `{}` sub-field whose key identifies the task type. See
