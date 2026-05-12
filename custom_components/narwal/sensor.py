@@ -258,7 +258,7 @@ class NarwalStationActivitySensor(NarwalEntity, SensorEntity):
     _attr_translation_key = "station_activity"
     _attr_options = [
         "idle", "mop_washing", "mop_drying",
-        "dust_bag_drying", "dust_disinfection",
+        "dust_emptying", "dust_bag_drying", "dust_disinfection",
     ]
     _attr_icon = "mdi:dishwasher"
 
@@ -288,9 +288,13 @@ class NarwalStationActivitySensor(NarwalEntity, SensorEntity):
         # mislabelled bag-drying cycles as mop_drying.
         #
         # Capture also showed multiple station markers can be present at
-        # once. When disinfection is active, f48.10 can remain present as
-        # the queued next dust-bag-drying step, so disinfection must win.
-        # Otherwise prefer dust-bag drying over generic mop drying.
+        # once. Dust emptying is a short, audible dock action and should
+        # win while the robot is still docked. When disinfection is active,
+        # f48.10 can remain present as the queued next dust-bag-drying
+        # step, so disinfection must win over dust-bag drying. Otherwise
+        # prefer dust-bag drying over generic mop drying.
+        if state.station_dust_emptying:
+            return "dust_emptying"
         if state.station_dust_disinfecting:
             return "dust_disinfection"
         if state.station_dust_bag_drying:

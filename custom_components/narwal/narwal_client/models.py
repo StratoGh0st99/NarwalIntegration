@@ -1052,9 +1052,10 @@ class NarwalState:
         self.station_dust_bag_drying = any("10" in e for e in f48_entries)
         self.station_mop_drying = any("13" in e for e in f48_entries)
         self.station_dust_disinfecting = any("14" in e for e in f48_entries)
-        # No sub-key for actual dust-bin emptying observed yet — leave
-        # the legacy flag wired off.
-        self.station_dust_emptying = False
+        # App-started room vacuum capture (2026-05-12): the dock audibly
+        # emptied the robot before it undocked while f48.5/f48.6 were
+        # present. Treat either marker as active dust-bin emptying.
+        self.station_dust_emptying = any("5" in e or "6" in e for e in f48_entries)
         # Field 47 = dock indicator (3=docked, 2=undocked)
         if "47" in decoded:
             try:
