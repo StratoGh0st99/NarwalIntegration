@@ -71,6 +71,15 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
     ) | (VacuumEntityFeature.CLEAN_AREA if Segment is not None else VacuumEntityFeature(0))
     _attr_fan_speed_list = FAN_SPEED_LIST
 
+    @property
+    def supported_features(self) -> VacuumEntityFeature:
+        """Return supported features for this specific Narwal model."""
+        features = self._attr_supported_features
+        product_key = self.coordinator.config_entry.data.get(CONF_PRODUCT_KEY, "")
+        if product_key in _CLOUD_ONLY_ROOM_CLEAN:
+            features &= ~VacuumEntityFeature.CLEAN_AREA
+        return features
+
     def __init__(self, coordinator: NarwalCoordinator) -> None:
         """Initialize the vacuum entity."""
         super().__init__(coordinator)
