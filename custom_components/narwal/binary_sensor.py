@@ -6,6 +6,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -29,6 +30,7 @@ async def async_setup_entry(
         NarwalActiveErrorSensor(coordinator),
         NarwalStationTankErrorSensor(coordinator),
         NarwalCleanWaterTankSensor(coordinator),
+        NarwalRemoteControlSensor(coordinator),
         NarwalUserActionSensor(coordinator),
     ])
 
@@ -126,6 +128,42 @@ class NarwalCleanWaterTankSensor(NarwalEntity, BinarySensorEntity):
             "identifier": ERROR_CODES.get(state.error_code, "unknown"),
             "severity": state.error_severity,
             "message": state.error_message,
+        }
+
+
+class NarwalRemoteControlSensor(NarwalEntity, BinarySensorEntity):
+    """On while the Flow 2 app live camera / manual control mode is active.
+
+    Live test (2026-05-12): opening the app's robot camera/manual steering
+    mode added robot_base_status.31=1 and field 3.4=15. Both changed back
+    after leaving live mode. The video stream itself is not exposed here;
+    this only reports the robot's local mode flag.
+    """
+
+    _attr_device_class = BinarySensorDeviceClass.RUNNING
+    _attr_translation_key = "remote_control"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: NarwalCoordinator) -> None:
+        super().__init__(coordinator)
+        device_id = coordinator.config_entry.data["device_id"]
+        self._attr_unique_id = f"{device_id}_remote_control"
+
+    @property
+    def is_on(self) -> bool | None:
+        state = self.coordinator.data
+        if state is None:
+            return None
+        return state.remote_control_active
+
+    @property
+    def extra_state_attributes(self) -> dict[str, int | bool]:
+        state = self.coordinator.data
+        if state is None:
+            return {}
+        return {
+            "base_31": bool(state.raw_base_status.get("31")),
+            "base_3_4": state.remote_control_sub_state,
         }
 
 

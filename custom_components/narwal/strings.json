@@ -103,6 +103,9 @@
       "clean_water_tank": {
         "name": "Clean water tank"
       },
+      "remote_control": {
+        "name": "Remote control"
+      },
       "user_action_required": {
         "name": "User action required"
       }

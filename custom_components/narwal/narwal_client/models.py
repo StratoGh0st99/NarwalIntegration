@@ -561,9 +561,8 @@ class NarwalState:
     station_dust_bag_drying: bool = False
     station_mop_drying: bool = False
     station_dust_disinfecting: bool = False
-    # Kept for backwards compatibility while sensors transition. Always
-    # False under the corrected mapping — real "dust emptying" sub-key
-    # has not yet been observed in capture.
+    # App-started room vacuum capture (2026-05-12) showed f48.5/f48.6
+    # while the dock audibly emptied the robot before undocking.
     station_dust_emptying: bool = False
 
     # Dust-bag drying timer. During manual bag drying the station marker
@@ -661,6 +660,12 @@ class NarwalState:
 
     # Dock activity (field 3 sub-field 12: 2/6 observed when docked)
     dock_activity: int = 0
+
+    # Remote camera/manual-control mode. During a live app camera/manual
+    # steering session, robot_base_status.31=1 and field 3.4=15; both
+    # cleared/changed when the live mode ended.
+    remote_control_active: bool = False
+    remote_control_sub_state: int = 0
 
     # Dock presence (field 3 sub-field 3)
     # Values observed: 1=on dock, 2=off dock, 6=on dock (charged idle)
@@ -1083,6 +1088,13 @@ class NarwalState:
                 self.dock_activity = int(field3.get("12", 0))
             except (ValueError, TypeError):
                 self.dock_activity = 0
+            # Sub-field 4 = sub-state. Observed value 15 during remote
+            # camera/manual steering mode while base.31=1.
+            try:
+                self.remote_control_sub_state = int(field3.get("4", 0))
+            except (ValueError, TypeError):
+                self.remote_control_sub_state = 0
+            self.remote_control_active = bool(decoded.get("31"))
             # Sub-field 3 = dock presence (1/6=on dock, 2=off dock)
             try:
                 self.dock_presence = int(field3.get("3", 0))
@@ -1098,6 +1110,8 @@ class NarwalState:
                 self.user_action_type = 0
         else:
             self.user_action_type = 0
+            self.remote_control_active = bool(decoded.get("31"))
+            self.remote_control_sub_state = 0
 
         # Map identity (Flow 2). base.30 + base.44 form an opaque
         # signature that flips between saved maps; track them so the
