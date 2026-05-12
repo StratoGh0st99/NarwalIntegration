@@ -102,12 +102,13 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         translation_key="user_action_seconds_left",
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.SECONDS,
+        suggested_display_precision=0,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         # Mirrors `remaining_s` from binary_sensor.user_action_required
         # so it can be graphed / used in automations directly. 0 when
         # no action is required.
-        value_fn=lambda state: (
+        value_fn=lambda state: int(
             max(state.user_action_target - state.user_action_elapsed, 0)
             if state.user_action_type != 0 and state.user_action_target > 0
             else 0
@@ -118,10 +119,11 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         translation_key="cleaning_time",
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.SECONDS,
+        suggested_display_precision=0,
         state_class=SensorStateClass.MEASUREMENT,
         # working_status.12, but only during active cleaning. The same
         # field is reused as a station-cycle timer during drying.
-        value_fn=lambda state: state.cleaning_time,
+        value_fn=lambda state: int(state.cleaning_time),
     ),
     NarwalSensorEntityDescription(
         key="firmware_version",
