@@ -210,6 +210,7 @@ ERROR_CODES: dict[int, str] = {
     0x01010036: "dirty_water_tank_error",  # 16842806 — Flow 2 app shows Dirty Water Tank red
     0x01010037: "clean_water_tank_empty",  # 16842807 — clean water tank empty / not installed
     0x02020031: "roller_brush_tangled",    # 33685553 — app code 1044: roller brush tangled
+    0x02310026: "left_rear_drive_wheel_stuck",  # 36765734 — left rear drive wheel stuck
     0x02310031: "robot_lifted",            # 36765745 — robot picked up / suspended
 }
 
@@ -220,6 +221,7 @@ ERROR_MESSAGES_EN: dict[int, str] = {
     0x01010036: "Dirty water tank problem",
     0x01010037: "Clean water tank empty or not installed",
     0x02020031: "The roller brush is tangled. Please check and clear it.",
+    0x02310026: "Left rear drive wheel stuck",
     0x02310031: "Robot lifted or suspended",
 }
 
