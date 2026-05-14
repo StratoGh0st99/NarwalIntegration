@@ -188,10 +188,10 @@ class WorkingStatus(IntEnum):
 class FanLevel(IntEnum):
     """Suction fan speed levels (SweepMode from APK)."""
 
-    QUIET = 0
-    NORMAL = 1
-    STRONG = 2
-    MAX = 3
+    QUIET = 1
+    NORMAL = 2
+    STRONG = 3
+    MAX = 4
 
 
 class MopHumidity(IntEnum):

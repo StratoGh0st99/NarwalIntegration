@@ -31,6 +31,9 @@
       "cleaning_time": {
         "name": "Temps de nettoyage"
       },
+      "cleaning_time_remaining": {
+        "name": "Temps de nettoyage restant estimé"
+      },
       "firmware_version": {
         "name": "Version du firmware"
       },
