@@ -1,5 +1,6 @@
 {
   "config": {
+    "flow_title": "Narwal Vacuum ({host})",
     "step": {
       "user": {
         "title": "Connect to Narwal Vacuum",
@@ -29,8 +30,26 @@
       "cleaning_area": {
         "name": "Cleaning area"
       },
+      "cleaning_progress": {
+        "name": "Cleaning progress"
+      },
+      "mop_drying_progress": {
+        "name": "Mop drying progress"
+      },
+      "dust_bag_drying_progress": {
+        "name": "Dust bag drying progress"
+      },
+      "dust_disinfection_progress": {
+        "name": "Dust disinfection progress"
+      },
       "cleaning_time": {
         "name": "Cleaning time"
+      },
+      "cleaning_time_remaining": {
+        "name": "Estimated remaining cleaning time"
+      },
+      "current_room": {
+        "name": "Current room"
       },
       "firmware_version": {
         "name": "Firmware version"
@@ -42,6 +61,32 @@
           "fully_charged": "Fully Charged",
           "not_charging": "Not Charging"
         }
+      },
+      "dust_bag_health": {
+        "name": "Dust bag health"
+      },
+      "station_activity": {
+        "name": "Station activity",
+        "state": {
+          "idle": "Idle",
+          "mop_washing": "Mop washing",
+          "mop_drying": "Mop drying",
+          "dust_emptying": "Dust emptying",
+          "dust_bag_drying": "Dust bag drying",
+          "dust_disinfection": "Dust cabinet disinfection"
+        }
+      },
+      "error_code": {
+        "name": "Error code"
+      },
+      "error_message": {
+        "name": "Error message"
+      },
+      "station_error_code": {
+        "name": "Dirty water tank code"
+      },
+      "user_action_seconds_left": {
+        "name": "User action seconds left"
       }
     },
     "binary_sensor": {
@@ -54,6 +99,31 @@
       },
       "charging": {
         "name": "Charging"
+      },
+      "active_error": {
+        "name": "Active error"
+      },
+      "station_tank_error": {
+        "name": "Dirty water tank"
+      },
+      "clean_water_tank": {
+        "name": "Clean water tank"
+      },
+      "remote_control": {
+        "name": "Remote control"
+      },
+      "user_action_required": {
+        "name": "User action required"
+      }
+    },
+    "select": {
+      "mop_humidity": {
+        "name": "Mop humidity",
+        "state": {
+          "slightly_dry": "Slightly dry",
+          "standard": "Standard",
+          "slightly_wet": "Slightly wet"
+        }
       }
     }
   }

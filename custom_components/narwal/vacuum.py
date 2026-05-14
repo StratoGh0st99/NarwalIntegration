@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
 from typing import Any
 
@@ -23,10 +25,13 @@ from .narwal_client import CommandResult, FanLevel, NarwalCommandError, WorkingS
 
 from . import NarwalConfigEntry
 from .const import FAN_SPEED_LIST, FAN_SPEED_MAP
+
 from .coordinator import NarwalCoordinator
 from .entity import NarwalEntity
 
 _LOGGER = logging.getLogger(__name__)
+_AREA_REGISTRY_PATH = Path("/config/.storage/core.area_registry")
+_ENTITY_REGISTRY_PATH = Path("/config/.storage/core.entity_registry")
 
 WORKING_STATUS_TO_ACTIVITY: dict[WorkingStatus, VacuumActivity] = {
     WorkingStatus.DOCKED: VacuumActivity.DOCKED,
@@ -60,8 +65,14 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         | VacuumEntityFeature.RETURN_HOME
         | VacuumEntityFeature.FAN_SPEED
         | VacuumEntityFeature.LOCATE
+        | VacuumEntityFeature.SEND_COMMAND
     ) | (VacuumEntityFeature.CLEAN_AREA if Segment is not None else VacuumEntityFeature(0))
     _attr_fan_speed_list = FAN_SPEED_LIST
+
+    @property
+    def supported_features(self) -> VacuumEntityFeature:
+        """Return supported features for this specific Narwal model."""
+        return self._attr_supported_features
 
     def __init__(self, coordinator: NarwalCoordinator) -> None:
         """Initialize the vacuum entity."""
@@ -99,10 +110,20 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
     def fan_speed(self) -> str | None:
         """Return the current fan speed.
 
-        The robot protocol does not broadcast the active fan speed setting,
-        so we track the last value set via the integration. Returns None
-        until the user sets a fan speed for the first time.
+        Flow 2 broadcasts the live suction level in robot_base_status
+        field 26 as 1=Quiet, 2=Normal, 3=Strong, 4=Super Powerful.
+        If the robot broadcasts a non-zero value, show it directly;
+        otherwise fall back to the last user-set value.
         """
+        state = self.coordinator.data
+        flow2_levels = {
+            1: "Quiet",
+            2: "Normal",
+            3: "Strong",
+            4: "Super Powerful",
+        }
+        if state is not None and state.fan_level_raw in flow2_levels:
+            return flow2_levels[state.fan_level_raw]
         return self._last_fan_speed
 
     # Timeout for action commands (start/stop/return) — robot may need
@@ -171,6 +192,33 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         """Locate the vacuum — robot says 'Robot is here'."""
         await self._ensure_awake()
         await self.coordinator.client.locate()
+
+    async def async_send_command(
+        self,
+        command: str,
+        params: dict | list | None = None,
+        **kwargs,
+    ) -> None:
+        """Handle vacuum.send_command service calls.
+
+        Supported commands:
+          - "freo_mind" / "freo_mind_start": start a Freo Mind (AI auto)
+            whole-house clean. Flow 2 only.
+        """
+        if command in ("freo_mind", "freo_mind_start"):
+            await self._ensure_awake()
+            resp = await self.coordinator.client.start_freo_mind()
+            _LOGGER.info(
+                "Freo Mind start: code=%s, success=%s",
+                resp.result_code, resp.success,
+            )
+            if not resp.success:
+                _LOGGER.warning(
+                    "Freo Mind start did not succeed (code=%s)",
+                    resp.result_code,
+                )
+            return
+        _LOGGER.warning("Unknown vacuum command: %s", command)
 
     async def async_set_fan_speed(self, fan_speed: str, **kwargs) -> None:
         """Set the fan speed."""
@@ -241,8 +289,63 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
+        self._sync_room_area_mapping()
         self._check_segment_changes()
         super()._handle_coordinator_update()
+
+    def _sync_room_area_mapping(self) -> None:
+        """Cache HA area names for each segment id.
+
+        Home Assistant stores the room->area assignment in the vacuum
+        entity registry options as `vacuum.area_mapping`. The mapping is
+        keyed by area slug, so resolve the slug to the human-readable area
+        name from the area registry and cache the final segment-id mapping
+        on the coordinator.
+        """
+        try:
+            area_mtime = _AREA_REGISTRY_PATH.stat().st_mtime_ns
+            entity_mtime = _ENTITY_REGISTRY_PATH.stat().st_mtime_ns
+        except OSError:
+            return
+        cache_key = (area_mtime, entity_mtime)
+        if getattr(self.coordinator, "_room_mapping_cache_key", None) == cache_key:
+            return
+        try:
+            area_data = json.loads(_AREA_REGISTRY_PATH.read_text())
+            entity_data = json.loads(_ENTITY_REGISTRY_PATH.read_text())
+            area_names = {
+                area.get("id"): area.get("name")
+                for area in area_data.get("data", {}).get("areas", [])
+                if isinstance(area, dict)
+            }
+            device_id = self.coordinator.config_entry.data.get("device_id")
+            vacuum_entry = next(
+                (
+                    entry
+                    for entry in entity_data.get("data", {}).get("entities", [])
+                    if isinstance(entry, dict)
+                    and entry.get("platform") == "narwal"
+                    and entry.get("device_id") == device_id
+                    and str(entry.get("entity_id", "")).startswith("vacuum.")
+                ),
+                None,
+            )
+            area_mapping = {}
+            if vacuum_entry:
+                area_map = vacuum_entry.get("options", {}).get("vacuum", {}).get("area_mapping", {})
+                if isinstance(area_map, dict):
+                    for area_slug, segment_ids in area_map.items():
+                        area_name = area_names.get(area_slug)
+                        if not area_name:
+                            continue
+                        if isinstance(segment_ids, list):
+                            for segment_id in segment_ids:
+                                area_mapping[str(segment_id)] = area_name
+            self.coordinator.room_area_mapping = area_mapping
+            self.coordinator._room_mapping_cache_key = cache_key
+            _LOGGER.debug("Synced room area mapping: %s", area_mapping)
+        except Exception:
+            _LOGGER.debug("Failed to sync room->area mapping", exc_info=True)
 
     def _check_segment_changes(self) -> None:
         """Detect segment changes and raise repair issue if needed.

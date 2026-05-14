@@ -15,6 +15,7 @@ MODEL = "Flow (AX12)"
 # "auto" cycles all known keys during discovery (slower, fallback).
 NARWAL_MODELS: dict[str, str] = {
     "Narwal Flow": "QoEsI5qYXO",
+    "Narwal Flow 2": "QxMSPG6VSO",
     "Narwal Freo Z10 Ultra": "DrzDKQ0MU8",
     "Narwal Freo X10 Pro": "CNbforyZWI",
     "Other / Auto-detect": "auto",
@@ -28,13 +29,14 @@ PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.BINARY_SENSOR,
     Platform.CAMERA,
+    Platform.SELECT,
 ]
 
 FAN_SPEED_MAP: dict[str, FanLevel] = {
-    "quiet": FanLevel.QUIET,
-    "normal": FanLevel.NORMAL,
-    "strong": FanLevel.STRONG,
-    "max": FanLevel.MAX,
+    "Quiet": FanLevel.QUIET,
+    "Normal": FanLevel.NORMAL,
+    "Strong": FanLevel.STRONG,
+    "Super Powerful": FanLevel.MAX,
 }
 
 FAN_SPEED_LIST: list[str] = list(FAN_SPEED_MAP.keys())

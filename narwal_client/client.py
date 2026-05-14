@@ -408,6 +408,10 @@ class NarwalClient:
             _LOGGER.debug("Failed to decode protobuf for topic %s", short_topic)
             return
 
+        # Log every decoded broadcast at DEBUG so tools/narwal_capture.py
+        # (and ad-hoc protocol RE) can pick them out of `ha core logs`.
+        # Cheap when DEBUG isn't enabled — _LOGGER.debug short-circuits.
+        _LOGGER.debug("DUMP %s: %r", short_topic, decoded)
         if short_topic == "status/working_status":
             self.state.update_from_working_status(decoded)
         elif short_topic == "status/robot_base_status":
@@ -425,6 +429,15 @@ class NarwalClient:
                 self.state.map_display_data.robot_y,
                 self.state.map_display_data.timestamp,
             )
+        elif short_topic == "status/point_navi_plan_traj":
+            self.state.update_from_plan_traj(decoded)
+        elif short_topic == "report/clean_report":
+            # Empty-payload event marker: the robot finished a cycle.
+            # Reset session-scoped state and log; the coordinator picks
+            # this up via the on_state_update callback and triggers a
+            # fresh map fetch.
+            self.state.last_clean_report_ts = time.time()
+            _LOGGER.info("clean_report received — clean cycle complete")
         if self.on_state_update:
             self.on_state_update(self.state)
 
@@ -862,6 +875,10 @@ class NarwalClient:
                 self.state.update_from_download_status(decoded)
             elif short_topic == "map/display_map":
                 self.state.map_display_data = MapDisplayData.from_broadcast(decoded)
+            elif short_topic == "status/point_navi_plan_traj":
+                self.state.update_from_plan_traj(decoded)
+            elif short_topic == "report/clean_report":
+                self.state.last_clean_report_ts = time.time()
 
         raise NarwalCommandError(
             f"No field5 response within {timeout}s"
@@ -914,6 +931,64 @@ class NarwalClient:
             timeout=10.0,
         )
 
+    async def start_freo_mind(self, **kwargs) -> CommandResponse:
+        """Start a Freo Mind (AI auto) whole-house clean.
+
+        Flow 2 only. Reverse-engineered from a live capture of an
+        app-initiated Freo Mind clean (firmware v01.07.19.00):
+
+            {1: {2: {}, 5: {1: {1: 4, 2: 2, 3: 1}, 7: {1: {}}}}}
+
+          field 5.1.1 = mode (4 = Vacuum and mop)
+          field 5.1.2 = mop humidity (2 = Standard)
+          field 5.1.3 = "Freo Mind / AI auto" marker (1)
+          field 5.7   = secondary marker also present in Freo Mind cleans
+        """
+        import blackboxprotobuf
+
+        msg = {
+            "1": {
+                "2": {},
+                "5": {
+                    "1": {"1": 4, "2": 2, "3": 1},
+                    "7": {"1": {}},
+                },
+            }
+        }
+        typedef = {
+            "1": {
+                "type": "message",
+                "message_typedef": {
+                    "2": {"type": "message", "message_typedef": {}},
+                    "5": {
+                        "type": "message",
+                        "message_typedef": {
+                            "1": {
+                                "type": "message",
+                                "message_typedef": {
+                                    "1": {"type": "int"},
+                                    "2": {"type": "int"},
+                                    "3": {"type": "int"},
+                                },
+                            },
+                            "7": {
+                                "type": "message",
+                                "message_typedef": {
+                                    "1": {"type": "message", "message_typedef": {}},
+                                },
+                            },
+                        },
+                    },
+                },
+            }
+        }
+        payload = blackboxprotobuf.encode_message(msg, typedef)
+        return await self.send_command(
+            TOPIC_CMD_START_CLEAN,
+            payload=payload,
+            timeout=10.0,
+        )
+
     def _build_room_clean_payload(self, room_ids: list[int]) -> bytes:
         """Build CleanTask protobuf with per-room clean params in field 1.2.
 
@@ -936,66 +1011,44 @@ class NarwalClient:
         if not room_ids:
             return self._DEFAULT_CLEAN_PAYLOAD
 
-        import blackboxprotobuf
+        def enc_varint(v: int) -> bytes:
+            out = bytearray()
+            n = int(v)
+            while True:
+                b = n & 0x7F
+                n >>= 7
+                if n:
+                    out.append(b | 0x80)
+                else:
+                    out.append(b)
+                    return bytes(out)
 
-        # Build per-room entries with default clean settings
-        room_entries = []
-        for rid in room_ids:
-            room_entries.append({
-                "1": rid,       # roomId
-                "2": 2,         # cleanMode = sweep+mop
-                "3": 1,         # cleanTimes = 1 pass
-                "6": 3,         # sweepMode = max suction
-                "7": 2,         # mopMode = wet
-            })
+        def enc_field(field_no: int, wire_type: int, value: bytes | int) -> bytes:
+            tag = enc_varint((field_no << 3) | wire_type)
+            if wire_type == 0:
+                return tag + enc_varint(int(value))
+            if wire_type == 2:
+                data = value if isinstance(value, bytes) else enc_varint(int(value))
+                return tag + enc_varint(len(data)) + data
+            raise ValueError(f"unsupported wire type: {wire_type}")
 
-        room_typedef = {
-            "type": "message",
-            "seen_repeated": True,
-            "message_typedef": {
-                "1": {"type": "uint"},
-                "2": {"type": "int"},
-                "3": {"type": "int"},
-                "6": {"type": "int"},
-                "7": {"type": "int"},
-            }
-        }
+        def enc_room_entry(room_id: int) -> bytes:
+            return b"".join([
+                enc_field(1, 0, room_id),
+                enc_field(2, 0, 2),
+                enc_field(3, 0, 1),
+                enc_field(6, 0, 3),
+                enc_field(7, 0, 2),
+            ])
 
-        # Single room: field 1.2 is a message; multiple: repeated message
-        field_2_value = room_entries[0] if len(room_entries) == 1 else room_entries
-
-        msg = {
-            "1": {
-                "2": field_2_value,
-                "5": {
-                    "1": {"1": 3, "2": 2, "3": 1},
-                    "5": {}
-                }
-            }
-        }
-        typedef = {
-            "1": {
-                "type": "message",
-                "message_typedef": {
-                    "2": room_typedef,
-                    "5": {
-                        "type": "message",
-                        "message_typedef": {
-                            "1": {
-                                "type": "message",
-                                "message_typedef": {
-                                    "1": {"type": "int"},
-                                    "2": {"type": "int"},
-                                    "3": {"type": "int"}
-                                }
-                            },
-                            "5": {"type": "message", "message_typedef": {}}
-                        }
-                    }
-                }
-            }
-        }
-        return blackboxprotobuf.encode_message(msg, typedef)
+        room_entries = b"".join(enc_field(2, 2, enc_room_entry(rid)) for rid in room_ids)
+        settings = enc_field(1, 2, b"".join([
+            enc_field(1, 0, 3),
+            enc_field(2, 0, 2),
+            enc_field(3, 0, 1),
+        ])) + enc_field(5, 2, b"")
+        clean_task = enc_field(1, 2, room_entries + enc_field(5, 2, settings))
+        return clean_task
 
     async def start_rooms(self, room_ids: list[int]) -> CommandResponse:
         """Start room-specific cleaning.
@@ -1051,7 +1104,7 @@ class NarwalClient:
         """Set suction fan speed.
 
         Args:
-            level: FanLevel enum or int (0=quiet, 1=normal, 2=strong, 3=max).
+            level: FanLevel enum or int (1=quiet, 2=normal, 3=strong, 4=Super Powerful).
         """
         payload = b"\x08" + bytes([int(level) & 0x7F])
         return await self.send_command(TOPIC_CMD_SET_FAN_LEVEL, payload)
@@ -1144,7 +1197,8 @@ class NarwalClient:
     async def get_map(self) -> MapData:
         """Download the full map data."""
         resp = await self.send_command(TOPIC_CMD_GET_MAP, timeout=15.0)
-        map_data = MapData.from_response(resp.data)
+        product_key = self.state.device_info.product_key if self.state.device_info else None
+        map_data = MapData.from_response(resp.data, product_key=product_key)
         self.state.map_data = map_data
         return map_data
 

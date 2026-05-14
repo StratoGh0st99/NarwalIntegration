@@ -28,7 +28,7 @@ Models marked **Not Compatible** use a different protocol or are cloud-only. Thi
 - **Start / Stop / Pause / Resume** — all commands validated on hardware
 - **Room-specific cleaning** — select rooms from the HA UI (requires HA 2026.3+)
 - **Return to dock** / **Locate** (robot announces "Robot is here")
-- **Fan speed** — Quiet, Normal, Strong, Max (set-only; robot doesn't broadcast current level)
+- **Fan speed** — Quiet, Normal, Strong, Super Powerful (Flow 2 uses 1=Quiet, 2=Normal, 3=Strong, 4=Super Powerful; set-only)
 
 ### Sensors
 - Battery level, cleaning area, cleaning time, firmware version
@@ -77,7 +77,7 @@ Models marked **Not Compatible** use a different protocol or are cloud-only. Thi
 
 - **Wake from deep sleep is unreliable** — robot may not respond after long idle periods. Opening the Narwal app briefly can help.
 - **Single connection** — close the Narwal app before using HA to avoid conflicts.
-- **Fan speed is set-only** — robot doesn't broadcast its current level.
+- **Fan speed is set-only** — robot doesn't broadcast its current level; Flow 2's suction labels are 1..4.
 - **Default clean settings** — start and room-specific clean use max suction, wet mop, single pass. Per-room customization is not yet available.
 - **Map may be stale** — robot can return an old map. A new clean cycle typically refreshes it.
 
