@@ -1011,66 +1011,44 @@ class NarwalClient:
         if not room_ids:
             return self._DEFAULT_CLEAN_PAYLOAD
 
-        import blackboxprotobuf
+        def enc_varint(v: int) -> bytes:
+            out = bytearray()
+            n = int(v)
+            while True:
+                b = n & 0x7F
+                n >>= 7
+                if n:
+                    out.append(b | 0x80)
+                else:
+                    out.append(b)
+                    return bytes(out)
 
-        # Build per-room entries with default clean settings
-        room_entries = []
-        for rid in room_ids:
-            room_entries.append({
-                "1": rid,       # roomId
-                "2": 2,         # cleanMode = sweep+mop
-                "3": 1,         # cleanTimes = 1 pass
-                "6": 3,         # sweepMode = max suction
-                "7": 2,         # mopMode = wet
-            })
+        def enc_field(field_no: int, wire_type: int, value: bytes | int) -> bytes:
+            tag = enc_varint((field_no << 3) | wire_type)
+            if wire_type == 0:
+                return tag + enc_varint(int(value))
+            if wire_type == 2:
+                data = value if isinstance(value, bytes) else enc_varint(int(value))
+                return tag + enc_varint(len(data)) + data
+            raise ValueError(f"unsupported wire type: {wire_type}")
 
-        room_typedef = {
-            "type": "message",
-            "seen_repeated": True,
-            "message_typedef": {
-                "1": {"type": "uint"},
-                "2": {"type": "int"},
-                "3": {"type": "int"},
-                "6": {"type": "int"},
-                "7": {"type": "int"},
-            }
-        }
+        def enc_room_entry(room_id: int) -> bytes:
+            return b"".join([
+                enc_field(1, 0, room_id),
+                enc_field(2, 0, 2),
+                enc_field(3, 0, 1),
+                enc_field(6, 0, 3),
+                enc_field(7, 0, 2),
+            ])
 
-        # Single room: field 1.2 is a message; multiple: repeated message
-        field_2_value = room_entries[0] if len(room_entries) == 1 else room_entries
-
-        msg = {
-            "1": {
-                "2": field_2_value,
-                "5": {
-                    "1": {"1": 3, "2": 2, "3": 1},
-                    "5": {}
-                }
-            }
-        }
-        typedef = {
-            "1": {
-                "type": "message",
-                "message_typedef": {
-                    "2": room_typedef,
-                    "5": {
-                        "type": "message",
-                        "message_typedef": {
-                            "1": {
-                                "type": "message",
-                                "message_typedef": {
-                                    "1": {"type": "int"},
-                                    "2": {"type": "int"},
-                                    "3": {"type": "int"}
-                                }
-                            },
-                            "5": {"type": "message", "message_typedef": {}}
-                        }
-                    }
-                }
-            }
-        }
-        return blackboxprotobuf.encode_message(msg, typedef)
+        room_entries = b"".join(enc_field(2, 2, enc_room_entry(rid)) for rid in room_ids)
+        settings = enc_field(1, 2, b"".join([
+            enc_field(1, 0, 3),
+            enc_field(2, 0, 2),
+            enc_field(3, 0, 1),
+        ])) + enc_field(5, 2, b"")
+        clean_task = enc_field(1, 2, room_entries + enc_field(5, 2, settings))
+        return clean_task
 
     async def start_rooms(self, room_ids: list[int]) -> CommandResponse:
         """Start room-specific cleaning.
@@ -1126,7 +1104,7 @@ class NarwalClient:
         """Set suction fan speed.
 
         Args:
-            level: FanLevel enum or int (0=quiet, 1=normal, 2=strong, 3=max).
+            level: FanLevel enum or int (1=quiet, 2=normal, 3=strong, 4=Super Powerful).
         """
         payload = b"\x08" + bytes([int(level) & 0x7F])
         return await self.send_command(TOPIC_CMD_SET_FAN_LEVEL, payload)

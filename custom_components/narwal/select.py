@@ -59,18 +59,12 @@ class NarwalMopHumiditySelect(NarwalEntity, SelectEntity):
     def current_option(self) -> str | None:
         """Return the current mop humidity setting.
 
-        Like fan_speed, the broadcasted value (field 29) only reflects
-        the *active* clean and reverts to a default while docked. We
-        prefer the live broadcast during cleaning, otherwise show the
-        last user-set value.
+        Prefer the live broadcast whenever the robot provides one;
+        otherwise fall back to the last user-set value.
         """
         state = self.coordinator.data
         if state is not None:
-            from .narwal_client import WorkingStatus  # local import to avoid cycle
-            cleaning = state.working_status in (
-                WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
-            )
-            if cleaning and state.mop_humidity_raw in _MOP_HUMIDITY_BROADCAST_TO_NAME:
+            if state.mop_humidity_raw in _MOP_HUMIDITY_BROADCAST_TO_NAME:
                 return _MOP_HUMIDITY_BROADCAST_TO_NAME[state.mop_humidity_raw]
         return self._last_set
 

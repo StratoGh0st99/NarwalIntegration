@@ -45,6 +45,12 @@
       "cleaning_time": {
         "name": "Cleaning time"
       },
+      "cleaning_time_remaining": {
+        "name": "Estimated remaining cleaning time"
+      },
+      "current_room": {
+        "name": "Current room"
+      },
       "firmware_version": {
         "name": "Firmware version"
       },

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
 from typing import Any
 
@@ -17,23 +19,19 @@ try:
 except ImportError:
     Segment = None  # HA < 2026.3 — room cleaning unavailable
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .narwal_client import CommandResult, FanLevel, NarwalCommandError, WorkingStatus
 
 from . import NarwalConfigEntry
-from .const import CONF_PRODUCT_KEY, FAN_SPEED_LIST, FAN_SPEED_MAP
+from .const import FAN_SPEED_LIST, FAN_SPEED_MAP
 
-# Product keys whose firmware routes single-room cleaning exclusively
-# through Tuya cloud MQTT — the local WS:9002 server does not accept
-# the clean_system/* topic family. Confirmed by capturing zero traffic
-# on the local socket while the official app triggered a room clean.
-_CLOUD_ONLY_ROOM_CLEAN: frozenset[str] = frozenset({"QxMSPG6VSO"})
 from .coordinator import NarwalCoordinator
 from .entity import NarwalEntity
 
 _LOGGER = logging.getLogger(__name__)
+_AREA_REGISTRY_PATH = Path("/config/.storage/core.area_registry")
+_ENTITY_REGISTRY_PATH = Path("/config/.storage/core.entity_registry")
 
 WORKING_STATUS_TO_ACTIVITY: dict[WorkingStatus, VacuumActivity] = {
     WorkingStatus.DOCKED: VacuumActivity.DOCKED,
@@ -74,11 +72,7 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
     @property
     def supported_features(self) -> VacuumEntityFeature:
         """Return supported features for this specific Narwal model."""
-        features = self._attr_supported_features
-        product_key = self.coordinator.config_entry.data.get(CONF_PRODUCT_KEY, "")
-        if product_key in _CLOUD_ONLY_ROOM_CLEAN:
-            features &= ~VacuumEntityFeature.CLEAN_AREA
-        return features
+        return self._attr_supported_features
 
     def __init__(self, coordinator: NarwalCoordinator) -> None:
         """Initialize the vacuum entity."""
@@ -117,21 +111,18 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         """Return the current fan speed.
 
         Flow 2 broadcasts the live suction level in robot_base_status
-        field 26 (1-indexed) but only while a clean task is active;
-        when docked/idle the field reverts to a default that doesn't
-        reflect the user's stored preference. So we only trust the
-        broadcast during cleaning, and fall back to the last
-        user-set value otherwise (matches the original behaviour).
+        field 26 as 1=Quiet, 2=Normal, 3=Strong, 4=Super Powerful.
+        If the robot broadcasts a non-zero value, show it directly;
+        otherwise fall back to the last user-set value.
         """
         state = self.coordinator.data
-        flow2_levels = {1: "quiet", 2: "normal", 3: "strong", 4: "max"}
-        if (
-            state is not None
-            and state.working_status in (
-                WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT,
-            )
-            and state.fan_level_raw in flow2_levels
-        ):
+        flow2_levels = {
+            1: "Quiet",
+            2: "Normal",
+            3: "Strong",
+            4: "Super Powerful",
+        }
+        if state is not None and state.fan_level_raw in flow2_levels:
             return flow2_levels[state.fan_level_raw]
         return self._last_fan_speed
 
@@ -274,13 +265,6 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
         Converts string segment IDs back to integer room IDs and sends
         a room-specific clean command to the robot.
         """
-        product_key = self.coordinator.config_entry.data.get(CONF_PRODUCT_KEY, "")
-        if product_key in _CLOUD_ONLY_ROOM_CLEAN:
-            raise HomeAssistantError(
-                "Single-room cleaning is not supported on this model via the "
-                "local connection — it is routed through the Narwal cloud. "
-                "Use the official Narwal app, or trigger a whole-house clean."
-            )
         await self._ensure_awake()
         room_ids = [int(sid) for sid in segment_ids]
         _LOGGER.info("Starting room-specific clean: rooms=%s", room_ids)
@@ -305,8 +289,63 @@ class NarwalVacuum(NarwalEntity, StateVacuumEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
+        self._sync_room_area_mapping()
         self._check_segment_changes()
         super()._handle_coordinator_update()
+
+    def _sync_room_area_mapping(self) -> None:
+        """Cache HA area names for each segment id.
+
+        Home Assistant stores the room->area assignment in the vacuum
+        entity registry options as `vacuum.area_mapping`. The mapping is
+        keyed by area slug, so resolve the slug to the human-readable area
+        name from the area registry and cache the final segment-id mapping
+        on the coordinator.
+        """
+        try:
+            area_mtime = _AREA_REGISTRY_PATH.stat().st_mtime_ns
+            entity_mtime = _ENTITY_REGISTRY_PATH.stat().st_mtime_ns
+        except OSError:
+            return
+        cache_key = (area_mtime, entity_mtime)
+        if getattr(self.coordinator, "_room_mapping_cache_key", None) == cache_key:
+            return
+        try:
+            area_data = json.loads(_AREA_REGISTRY_PATH.read_text())
+            entity_data = json.loads(_ENTITY_REGISTRY_PATH.read_text())
+            area_names = {
+                area.get("id"): area.get("name")
+                for area in area_data.get("data", {}).get("areas", [])
+                if isinstance(area, dict)
+            }
+            device_id = self.coordinator.config_entry.data.get("device_id")
+            vacuum_entry = next(
+                (
+                    entry
+                    for entry in entity_data.get("data", {}).get("entities", [])
+                    if isinstance(entry, dict)
+                    and entry.get("platform") == "narwal"
+                    and entry.get("device_id") == device_id
+                    and str(entry.get("entity_id", "")).startswith("vacuum.")
+                ),
+                None,
+            )
+            area_mapping = {}
+            if vacuum_entry:
+                area_map = vacuum_entry.get("options", {}).get("vacuum", {}).get("area_mapping", {})
+                if isinstance(area_map, dict):
+                    for area_slug, segment_ids in area_map.items():
+                        area_name = area_names.get(area_slug)
+                        if not area_name:
+                            continue
+                        if isinstance(segment_ids, list):
+                            for segment_id in segment_ids:
+                                area_mapping[str(segment_id)] = area_name
+            self.coordinator.room_area_mapping = area_mapping
+            self.coordinator._room_mapping_cache_key = cache_key
+            _LOGGER.debug("Synced room area mapping: %s", area_mapping)
+        except Exception:
+            _LOGGER.debug("Failed to sync room->area mapping", exc_info=True)
 
     def _check_segment_changes(self) -> None:
         """Detect segment changes and raise repair issue if needed.
