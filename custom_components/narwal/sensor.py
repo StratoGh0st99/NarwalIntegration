@@ -16,6 +16,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .narwal_client import NarwalState, WorkingStatus
+from .narwal_client.map_renderer import lookup_room_at_grid
 
 from . import NarwalConfigEntry
 from .coordinator import NarwalCoordinator
@@ -27,6 +28,25 @@ class NarwalSensorEntityDescription(SensorEntityDescription):
     """Describes a Narwal sensor entity."""
 
     value_fn: Callable[[NarwalState], float | str | None]
+
+
+
+def _remaining_cleaning_seconds(state: NarwalState) -> int:
+    """Estimate remaining cleaning time in seconds.
+
+    Uses elapsed cleaning time and cleaning progress percent:
+      remaining ≈ elapsed * (100 - progress) / progress
+    Returns 0 when the estimate can't be made yet.
+    """
+    if not state.is_cleaning:
+        return 0
+    progress = state.cleaning_progress_pct
+    elapsed = state.cleaning_time
+    if progress <= 0 or elapsed <= 0:
+        return 0
+    remaining = round(elapsed * max(100.0 - min(progress, 100.0), 0.0) / progress)
+    # Snap to 30-second buckets to avoid UI jitter from frequent broadcasts.
+    return max(int(round(remaining / 30.0) * 30), 0)
 
 
 SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
@@ -126,6 +146,16 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         value_fn=lambda state: int(state.cleaning_time),
     ),
     NarwalSensorEntityDescription(
+        key="cleaning_time_remaining",
+        translation_key="cleaning_time_remaining",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        suggested_display_precision=0,
+        state_class=SensorStateClass.MEASUREMENT,
+        # Approximation from elapsed cleaning time + completion %.
+        value_fn=_remaining_cleaning_seconds,
+    ),
+    NarwalSensorEntityDescription(
         key="firmware_version",
         translation_key="firmware_version",
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -156,6 +186,13 @@ SENSOR_DESCRIPTIONS: tuple[NarwalSensorEntityDescription, ...] = (
         # English fault message for known codes; falls back to the robot's
         # localized firmware text when the code is not mapped yet.
         value_fn=lambda state: state.error_message or "",
+    ),
+    NarwalSensorEntityDescription(
+        key="current_room",
+        translation_key="current_room",
+        # Shows the active room name during room cleaning. Returns
+        # "unknown" when the room can't be resolved.
+        value_fn=lambda state: state.current_room_name or "unknown",
     ),
     NarwalSensorEntityDescription(
         key="station_error_code",
@@ -204,6 +241,33 @@ class NarwalSensor(NarwalEntity, SensorEntity):
         state = self.coordinator.data
         if state is None:
             return None
+        if self.entity_description.key == "current_room":
+            if state.current_room_id > 0:
+                if state.map_data is not None:
+                    for room in state.map_data.rooms:
+                        if room.room_id == state.current_room_id:
+                            return room.display_name
+                return f"Room {state.current_room_id}"
+            if state.map_data is not None and state.map_display_data is not None:
+                grid = state.map_display_data.to_grid_coords(
+                    state.map_data.resolution,
+                    state.map_data.origin_x,
+                    state.map_data.origin_y,
+                )
+                if grid is not None:
+                    room_id, _room_desc = lookup_room_at_grid(
+                        state.map_data.compressed_map,
+                        state.map_data.width,
+                        state.map_data.height,
+                        grid[0],
+                        grid[1],
+                    )
+                    if room_id > 0:
+                        for room in state.map_data.rooms:
+                            if room.room_id == room_id:
+                                return room.display_name
+                        return f"Room {room_id}"
+            return "unknown"
         return self.entity_description.value_fn(state)
 
 

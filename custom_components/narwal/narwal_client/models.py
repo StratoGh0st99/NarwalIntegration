@@ -626,6 +626,8 @@ class NarwalState:
     # 4 = 1 has been finished. Empty list when not cleaning or all
     # rooms still pending.
     rooms_completed: list[int] = field(default_factory=list)
+    current_room_id: int = 0
+    current_room_index: int = 0
 
     # Mop-drying timer (Flow 2). Live-confirmed by toggling between
     # drying modes:
@@ -778,6 +780,12 @@ class NarwalState:
             return True
         if self.working_status in (WorkingStatus.CLEANING, WorkingStatus.CLEANING_ALT):
             return False
+        # Dock presence from field 3.3 is the most direct signal we have
+        # on this unit: 1/6 = on dock, 2 = off dock.
+        if self.dock_presence in (1, 6):
+            return True
+        if self.dock_presence == 2:
+            return False
         # For STANDBY, UNKNOWN, or any other status: check dock field signals
         if self.dock_sub_state == 1:
             return True
@@ -811,6 +819,23 @@ class NarwalState:
         ):
             return False
         return self.is_returning_to_dock and self.dock_sub_state == 2
+
+    @property
+    def current_room_name(self) -> str | None:
+        """Return the display name of the room currently being cleaned.
+
+        Uses the current room id resolved from working_status.6 plus the
+        active room queue. Falls back to "Room <id>" when the map does not
+        contain a matching name yet.
+        """
+        if self.current_room_id <= 0:
+            return "unknown"
+        if self.map_data is None:
+            return f"Room {self.current_room_id}"
+        for room in self.map_data.rooms:
+            if room.room_id == self.current_room_id:
+                return room.display_name
+        return f"Room {self.current_room_id}"
 
     def update_from_working_status(self, decoded: dict[str, Any]) -> None:
         """Update state from a decoded working_status message.
@@ -872,6 +897,49 @@ class NarwalState:
             except (ValueError, TypeError):
                 pass
         self.rooms_completed = completed
+        self.current_room_index = 0
+        self.current_room_id = 0
+        try:
+            current_hint = int(decoded.get("6", 0) or 0)
+        except (ValueError, TypeError):
+            current_hint = 0
+        self.current_room_index = current_hint
+        if isinstance(rooms, list):
+            # Prefer the room currently in progress.
+            for entry in rooms:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    room_id = int(entry.get("1", 0) or 0)
+                except (ValueError, TypeError):
+                    room_id = 0
+                try:
+                    flag = int(entry.get("2", 0) or 0)
+                except (ValueError, TypeError):
+                    flag = 0
+                if room_id > 0 and flag == 1:
+                    self.current_room_id = room_id
+                    break
+            if self.current_room_id == 0 and current_hint > 0 and 1 <= current_hint <= len(rooms):
+                entry = rooms[current_hint - 1]
+                if isinstance(entry, dict):
+                    try:
+                        self.current_room_id = int(entry.get("1", 0) or 0)
+                    except (ValueError, TypeError):
+                        self.current_room_id = 0
+        elif isinstance(rooms, dict):
+            # Single-room broadcasts often collapse to {room_id: flag}.
+            for key, value in rooms.items():
+                try:
+                    room_id = int(key)
+                    flag = int(value or 0)
+                except (ValueError, TypeError):
+                    continue
+                if room_id > 0 and flag == 1:
+                    self.current_room_id = room_id
+                    break
+            if self.current_room_id == 0 and current_hint > 0:
+                self.current_room_id = current_hint
         # Mop-drying timer (Flow 2 hypothesis from live capture).
         try:
             self.mop_drying_elapsed = int(decoded.get("8", 0) or 0)
@@ -956,15 +1024,16 @@ class NarwalState:
                 self.dock_field11 = 0
         # Field 26 = current suction level (Flow 2 only; live captures from
         # firmware v01.07.19.00 confirm the 1-indexed scale 1=Quiet,
-        # 2=Standard, 3=Strong, 4=Super powerful). Not observed on Flow 1
-        # — leaves fan_level_raw at 0 there.
+        # 2=Normal/Standard, 3=Strong, 4=Super Powerful). Not observed on
+        # Flow 1 — leaves fan_level_raw at 0 there.
         if "26" in decoded:
             try:
                 self.fan_level_raw = int(decoded["26"])
             except (ValueError, TypeError):
                 self.fan_level_raw = 0
         # Field 29 = current mop humidity (Flow 2). 1=Slightly dry,
-        # 2=Standard, 3=Slightly wet (live-confirmed).
+        # 2=Standard, 3=Slightly wet (live-confirmed). Used for UI state
+        # even while docked when the robot keeps broadcasting it.
         if "29" in decoded:
             try:
                 self.mop_humidity_raw = int(decoded["29"])
